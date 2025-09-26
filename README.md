@@ -103,15 +103,25 @@ This project builds a price-prediction model for used cars and lays the groundwo
 ---
 
 ## Repository Structure
-flowchart LR
-  A[Raw CSV (Kaggle)] --> B[clean_and_preprocess.py]
-  B --> C[data/clean_used_cars.csv]
-  B --> D[model/preprocessor.pkl]
-  C --> E[train_baseline.py]
-  C --> F[train_gbm.py]
-  D --> E
-  D --> F
-  E --> G[metrics_baseline.json]
-  F --> H[metrics_gbm.json + preview_gbm.csv]
+## Repository Structure
+
+| Path | Description |
+|---|---|
+| 📁 `.devcontainer/` | Codespaces environment (Python/Node): `devcontainer.json`, `post-create.sh` |
+| 📁 `data/` | Raw & processed CSVs *(_gitignored_)* |
+| 📁 `model/` | ML assets and scripts |
+| ├── `clean_and_preprocess.py` | Cleaning + feature engineering pipeline |
+| ├── `preprocessor.pkl` | Fitted `ColumnTransformer` (committed for reuse) |
+| ├── `train_baseline.py` | Baseline Ridge trainer (log-price) |
+| ├── `train_gbm.py` | LightGBM trainer (stronger model) |
+| ├── `metrics_baseline.json` | Baseline metrics (MAE/RMSE/R²) |
+| ├── `metrics_gbm.json` | GBM metrics (MAE/RMSE/R²) |
+| └── `preview_gbm.csv` | Sample GBM predictions vs. actuals |
+| 📁 `notebooks/` | Exploratory notebooks |
+| └── `00_quick_audit.ipynb` | Fast schema/missingness audit |
+| 📁 `api/` | *(planned)* FastAPI `/predict` service |
+| 📁 `web/` | *(planned)* Next.js + Tailwind dashboard |
+| 📄 `README.md` | Project documentation |
+
 
 
