@@ -56,6 +56,7 @@
 - 📈 [Results](#results-current-run)
 - 🧪 [Predict Example](#example-predict-with-the-trained-pipeline)
 - 🗺️ [Repository Structure](#repository-structure)
+- 🖥️ [Dashboard](#dashboard)
 
 ---
 
@@ -92,16 +93,18 @@
 
 ---
 
-## Screenshots
+## Dashboard
+
 <p align="center">
-  <img src="assets/audit-notebook.png" width="800" alt="Audit Notebook">
+  <!-- Replace YOUR_DASHBOARD_URL after you deploy -->
+  <a href="https://YOUR_DASHBOARD_URL" target="_blank" rel="noopener">
+    <img alt="Live Dashboard" src="https://img.shields.io/badge/Live_Dashboard-Open_App-6D28D9?logo=streamlit&logoColor=white">
+  </a>
 </p>
 
-<!-- later
 <p align="center">
-  <img src="assets/dashboard.png" width="800" alt="Web Dashboard">
+  <img src="assets/dashboard.png" width="980" alt="Used Car Price — Dashboard (dark purple)">
 </p>
--->
 
 ---
 
