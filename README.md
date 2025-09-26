@@ -103,21 +103,15 @@ This project builds a price-prediction model for used cars and lays the groundwo
 ---
 
 ## Repository Structure
-used-car-price-app/
-├─ .devcontainer/ # Codespaces environment (Python/Node)
-├─ api/ # (planned) FastAPI service
-├─ data/ # raw & processed CSVs (gitignored)
-├─ model/
-│ ├─ clean_and_preprocess.py # cleaning + feature engineering
-│ ├─ preprocessor.pkl # fitted transformer (committed by design)
-│ ├─ train_baseline.py # Ridge baseline
-│ ├─ train_gbm.py # LightGBM model
-│ ├─ metrics_baseline.json
-│ ├─ metrics_gbm.json
-│ └─ preview_gbm.csv
-├─ notebooks/
-│ └─ 00_quick_audit.ipynb # quick data health check
-├─ web/ # (planned) Next.js dashboard
-└─ README.md
+flowchart LR
+  A[Raw CSV (Kaggle)] --> B[clean_and_preprocess.py]
+  B --> C[data/clean_used_cars.csv]
+  B --> D[model/preprocessor.pkl]
+  C --> E[train_baseline.py]
+  C --> F[train_gbm.py]
+  D --> E
+  D --> F
+  E --> G[metrics_baseline.json]
+  F --> H[metrics_gbm.json + preview_gbm.csv]
 
 
