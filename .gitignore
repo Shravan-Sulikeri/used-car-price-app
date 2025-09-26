@@ -1,1 +1,6 @@
 
+data/
+model/*.pkl
+!model/preprocessor.pkl
+.ipynb_checkpoints/
+**/__pycache__/
