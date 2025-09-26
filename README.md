@@ -1,108 +1,65 @@
-# Used Car Price — ML & Analytics
+<h1 align="center">Used Car Price — ML & Analytics</h1>
 
-Predict used-car listing prices and explore market trends with a modern, reproducible pipeline (pandas + scikit-learn + LightGBM) and a production-ready GitHub Codespaces setup.
+<p align="center">
+  Predict used-car listing prices and explore market trends with a modern, reproducible pipeline.
+</p>
 
-> **Dataset:** Kaggle — `tsaustin/us-used-car-sales-data`. Review the dataset’s license on Kaggle before redistribution.
+<p align="center">
+  <img alt="Status" src="https://img.shields.io/badge/Status-Work_in_progress-yellow">
+  <img alt="License" src="https://img.shields.io/badge/License-MIT-green">
+  <img alt="Codespaces" src="https://img.shields.io/badge/Codespaces-Ready-181717?logo=github">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.11-blue?logo=python&logoColor=white">
+  <img alt="scikit-learn" src="https://img.shields.io/badge/scikit--learn-1.x-F7931E?logo=scikitlearn&logoColor=white">
+  <img alt="LightGBM" src="https://img.shields.io/badge/LightGBM-GBDT-3FB950">
+</p>
 
----
-
-## Table of Contents
-- [Overview](#overview)
-- [Features](#features)
-- [Tech Stack](#tech-stack)
-- [Repository Structure](#repository-structure)
-- [Getting Started (GitHub Codespaces)](#getting-started-github-codespaces)
-- [Data Intake & Audit](#data-intake--audit)
-- [Cleaning & Feature Engineering](#cleaning--feature-engineering)
-- [Modeling](#modeling)
-- [Quick Prediction Example](#quick-prediction-example)
-- [Results (Current Run)](#results-current-run)
-- [Reproducibility](#reproducibility)
-- [Roadmap](#roadmap)
-- [Data & Security Notes](#data--security-notes)
-- [License & Acknowledgements](#license--acknowledgements)
-
----
-
-## Overview
-This project builds a price-prediction model for used cars and lays the groundwork for a modern dashboard (Next.js/Tailwind) and a simple prediction API (FastAPI). It is designed to be:
-- **Reproducible** (devcontainer + scripted steps)
-- **Auditable** (notebook for early checks, JSON metrics)
-- **Deployable** (API/UI planned; free-tier friendly)
-
----
-
-## Features
-- **One-click environment** via GitHub Codespaces (`.devcontainer/`)
-- **Data audit notebook** to discover schema & quality
-- **Robust cleaning** with automatic column mapping (e.g., `pricesold → price`)
-- **Reusable preprocessor** (`ColumnTransformer`) for training & serving
-- **Models:** Baseline Ridge and LightGBM, trained on log-price
-- **Metrics artifacts** (`metrics_*.json`) and sample predictions
-
----
-
-## Tech Stack
-- **Python:** pandas, numpy, scikit-learn, LightGBM, category-encoders, joblib  
-- **Dev:** GitHub Codespaces, Jupyter  
-- **Planned:** FastAPI (API), Next.js + Tailwind (web dashboard), Vercel/Render (hosting)
-
----
-
-## Repository Structure
-
-# Used Car Price — ML & Analytics
-
-Predict used-car listing prices and explore market trends with a modern, reproducible pipeline (pandas + scikit-learn + LightGBM) and a production-ready GitHub Codespaces setup.
 
 > **Dataset:** Kaggle — `tsaustin/us-used-car-sales-data`. Review the dataset’s license on Kaggle before redistribution.
 
 ---
 
-## Table of Contents
-- [Overview](#overview)
-- [Features](#features)
-- [Tech Stack](#tech-stack)
-- [Repository Structure](#repository-structure)
-- [Getting Started (GitHub Codespaces)](#getting-started-github-codespaces)
-- [Data Intake & Audit](#data-intake--audit)
-- [Cleaning & Feature Engineering](#cleaning--feature-engineering)
-- [Modeling](#modeling)
-- [Quick Prediction Example](#quick-prediction-example)
-- [Results (Current Run)](#results-current-run)
-- [Reproducibility](#reproducibility)
-- [Roadmap](#roadmap)
-- [Data & Security Notes](#data--security-notes)
-- [License & Acknowledgements](#license--acknowledgements)
+## Tech Stack
 
----
+## Tech Stack
 
-## Overview
-This project builds a price-prediction model for used cars and lays the groundwork for a modern dashboard (Next.js/Tailwind) and a simple prediction API (FastAPI). It is designed to be:
-- **Reproducible** (devcontainer + scripted steps)
-- **Auditable** (notebook for early checks, JSON metrics)
-- **Deployable** (API/UI planned; free-tier friendly)
+**Data & Modeling**
+- ![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python&logoColor=white)  
+  pandas • numpy • scikit-learn (pipelines, ColumnTransformer) • **LightGBM** • category-encoders • joblib
+
+**Dev & Tooling**
+- ![Codespaces](https://img.shields.io/badge/GitHub-Codespaces-181717?logo=github)  
+  Dev Containers • Jupyter
+
+**Planned Delivery**
+- ![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi) • ![Next.js](https://img.shields.io/badge/Next.js-UI-000000?logo=nextdotjs) • ![Tailwind](https://img.shields.io/badge/Tailwind-CSS-38BDF8?logo=tailwindcss)  
+  Hosting: Vercel (web), Render (API)
+
 
 ---
 
 ## Features
-- **One-click environment** via GitHub Codespaces (`.devcontainer/`)
-- **Data audit notebook** to discover schema & quality
-- **Robust cleaning** with automatic column mapping (e.g., `pricesold → price`)
-- **Reusable preprocessor** (`ColumnTransformer`) for training & serving
-- **Models:** Baseline Ridge and LightGBM, trained on log-price
-- **Metrics artifacts** (`metrics_*.json`) and sample predictions
+
+- **Reproducible environment** (`.devcontainer/`) — one-click Codespaces
+- **Audit notebook** for schema/missingness sanity checks
+- **Robust cleaning** with fuzzy column mapping (e.g., `pricesold → price`, `yearsold → year`)
+- **Feature engineering:** `age`, `mileage_per_year`, `high_mileage`
+- **Two models:** Ridge (baseline) and **LightGBM** (stronger)
+- **Artifacted metrics & previews** (`metrics_*.json`, `preview_gbm.csv`)
 
 ---
 
-## Tech Stack
-- **Python:** pandas, numpy, scikit-learn, LightGBM, category-encoders, joblib  
-- **Dev:** GitHub Codespaces, Jupyter  
-- **Planned:** FastAPI (API), Next.js + Tailwind (web dashboard), Vercel/Render (hosting)
+---
+## Quick Links
+- ▶️ [Quickstart](#quickstart-codespaces)
+- 🧼 [Cleaning & Features](#cleaning--feature-engineering)
+- 🤖 [Modeling](#modeling)
+- 📈 [Results](#results-current-run)
+- 🧪 [Predict Example](#example-predict-with-the-trained-pipeline)
+- 🗺️ [Repository Structure](#repository-structure)
 
 ---
 
-## Repository Structure
+
 ## Repository Structure
 
 | Path | Description |
@@ -124,4 +81,47 @@ This project builds a price-prediction model for used cars and lays the groundwo
 | 📄 `README.md` | Project documentation |
 
 
+---
 
+## Results (current run)
+
+| Model     | MAE ($) | RMSE ($) | R²   |
+|-----------|---------|----------|------|
+| Ridge     | 6,660   | 12,538   | 0.125 |
+| LightGBM  | **5,826** | **10,898** | **0.339** |
+
+---
+
+## Screenshots
+<p align="center">
+  <img src="assets/audit-notebook.png" width="800" alt="Audit Notebook">
+</p>
+
+<!-- later
+<p align="center">
+  <img src="assets/dashboard.png" width="800" alt="Web Dashboard">
+</p>
+-->
+
+---
+
+## Model Card (brief)
+**Intended use:** Educational/portfolio demo for US used-car price estimation.  
+**Data:** Kaggle “US Used Car Sales Data”; columns normalized (e.g., `pricesold→price`, `yearsold→year`).  
+**Target:** Price (trained in log-space; predictions returned in USD).  
+**Main features:** `year`, `mileage`, `make`, `model`, `body`, `age`, `mileage_per_year`, `high_mileage`.  
+**Limitations:** No trim/options, regional demand, or vehicle history → larger error on rare configs.  
+**Ethics:** Not for credit/insurance decisions; may reflect historical market biases.
+
+---
+
+## Contributing
+PRs welcomed for: API `/predict`, Next.js dashboard, CI, and ONNX export.
+
+## Contact
+**Shravan Sulikeri** — feel free to open an issue or reach out via GitHub.
+
+## License
+MIT — see `LICENSE`. Verify the Kaggle dataset license before redistributing data/models.
+
+---
