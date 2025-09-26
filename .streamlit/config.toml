@@ -1,0 +1,7 @@
+[theme]
+base = "dark"
+primaryColor = "#A855F7"           # purple (violet-500)
+backgroundColor = "#0F0A1F"        # deep indigo/eggplant
+secondaryBackgroundColor = "#151032"
+textColor = "#F5F3FF"              # very light purple
+font = "sans serif"
