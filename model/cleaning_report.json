@@ -1,0 +1,28 @@
+{
+  "raw_rows": 122144,
+  "deduped_and_filtered_rows": 116624,
+  "dropped_rows_percent": 4.52,
+  "ref_year_used": 2025,
+  "kept_columns": [
+    "price",
+    "year",
+    "mileage",
+    "make",
+    "model",
+    "body",
+    "age",
+    "mileage_per_year",
+    "high_mileage"
+  ],
+  "numeric_features": [
+    "year",
+    "mileage",
+    "age",
+    "mileage_per_year"
+  ],
+  "low_card_cats": [],
+  "high_card_cats": [
+    "make",
+    "model"
+  ]
+}
