@@ -1,103 +1,439 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
+import { useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
+
+const Chart = dynamic(() => import('react-apexcharts'), { ssr: false });
+
+type OptionsResp = {
+  makes: string[];
+  models: string[];      // global model list (fallback)
+  bodies: string[];
+  year_min: number;
+  year_max: number;
+};
+
+type SummaryResp = {
+  rows: number;
+  median_price: number;
+  median_mileage: number;
+  unique_makes: number;
+  unique_models: number;
+};
+
+type ChartsResp = {
+  price_hist: { bins: number[]; counts: number[] };
+  price_by_year: { year: number[]; price: number[] };
+  top_models: { model: string[]; price: number[] };
+  make_share: { make: string[]; count: number[] };
+  model_share: { model: string[]; count: number[] };
+};
+
+// ---------- Config ----------
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
+
+// Neon green on black theme
+const ACCENT = '#7CFC00';
+const ACCENT_SOFT = '#b7ff5c';
+const CARD_BG = 'rgba(255,255,255,0.04)';
+
+function num(n?: number | null) {
+  if (n == null) return '—';
+  return n.toLocaleString();
+}
+function usd(n?: number | null) {
+  if (n == null) return '—';
+  return `$${Math.round(n).toLocaleString()}`;
+}
+
+// ---------- UI ----------
+export default function Page() {
+  const [options, setOptions] = useState<OptionsResp | null>(null);
+  const [make, setMake] = useState<string>('(all)');
+  const [modelsForMake, setModelsForMake] = useState<string[]>([]);
+  const [model, setModel] = useState<string>('(all)');
+  const [y0, setY0] = useState<number | null>(null);
+  const [y1, setY1] = useState<number | null>(null);
+
+  const [summary, setSummary] = useState<SummaryResp | null>(null);
+  const [charts, setCharts] = useState<ChartsResp | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Load options on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        setErr(null);
+        const r = await fetch(`${API_BASE}/options`, { cache: 'no-store' });
+        const js = (await r.json()) as OptionsResp;
+        setOptions(js);
+        setY0(js.year_min);
+        setY1(js.year_max);
+      } catch (e: any) {
+        setErr(`Options error: ${e?.message || e}`);
+      }
+    })();
+  }, []);
+
+  // When Make changes, refresh the Model list using /charts model_share (so it’s truly per-make)
+  useEffect(() => {
+    (async () => {
+      if (!options) return;
+      if (make === '(all)') {
+        setModelsForMake([]);
+        setModel('(all)');
+        return;
+      }
+      try {
+        const url = new URL(`${API_BASE}/charts`);
+        url.searchParams.set('make', make);
+        if (y0 != null) url.searchParams.set('y0', String(y0));
+        if (y1 != null) url.searchParams.set('y1', String(y1));
+        const r = await fetch(url.toString(), { cache: 'no-store' });
+        const js = (await r.json()) as ChartsResp;
+        const list = js?.model_share?.model || [];
+        setModelsForMake(list);
+        setModel('(all)'); // reset selection when make changes
+      } catch {
+        // fallback to global models if charts call fails
+        setModelsForMake(options.models || []);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [make, y0, y1, options]);
+
+  // Load summary + charts whenever filters change
+  useEffect(() => {
+    if (!options || y0 == null || y1 == null) return;
+    (async () => {
+      try {
+        setLoading(true);
+        setErr(null);
+
+        // summary
+        const sUrl = new URL(`${API_BASE}/summary`);
+        if (make !== '(all)') sUrl.searchParams.set('make', make);
+        if (model !== '(all)') sUrl.searchParams.set('model', model);
+        sUrl.searchParams.set('y0', String(y0));
+        sUrl.searchParams.set('y1', String(y1));
+        const sr = await fetch(sUrl.toString(), { cache: 'no-store' });
+        const sJson = (await sr.json()) as SummaryResp;
+        setSummary(sJson);
+
+        // charts
+        const cUrl = new URL(`${API_BASE}/charts`);
+        if (make !== '(all)') cUrl.searchParams.set('make', make);
+        if (model !== '(all)') cUrl.searchParams.set('model', model);
+        cUrl.searchParams.set('y0', String(y0));
+        cUrl.searchParams.set('y1', String(y1));
+        const cr = await fetch(cUrl.toString(), { cache: 'no-store' });
+        const cJson = (await cr.json()) as ChartsResp;
+        setCharts(cJson);
+      } catch (e: any) {
+        setErr(`Data error: ${e?.message || e}`);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [options, make, model, y0, y1]);
+
+  const modelOptions = useMemo<string[]>(
+    () => (make === '(all)' ? [] : modelsForMake),
+    [make, modelsForMake]
+  );
+
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
-
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+    <div className="min-h-screen bg-black text-white">
+      <div className="mx-auto max-w-7xl px-5 py-6">
+        {/* Header */}
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-extrabold tracking-tight">
+              Used Car Price — <span className="text-[var(--accent,#7CFC00)]">Dashboard</span>
+            </h1>
+            <p className="text-gray-400 mt-1">
+              Interactive analytics powered by FastAPI + ApexCharts.
+            </p>
+          </div>
+          <Badge />
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
+
+        {/* Filters */}
+        <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-4">
+          {/* Make */}
+          <div className="card">
+            <label className="label">Make</label>
+            <select
+              value={make}
+              onChange={(e) => setMake(e.target.value)}
+              className="select"
+            >
+              <option>(all)</option>
+              {options?.makes?.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Model (cascades) */}
+          <div className="card">
+            <label className="label">Model</label>
+            <select
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              className="select"
+              disabled={make === '(all)' || modelOptions.length === 0}
+            >
+              <option>(all)</option>
+              {modelOptions.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+            {make !== '(all)' && (
+              <p className="text-xs text-gray-400 mt-2">
+                {modelOptions.length.toLocaleString()} models for {make}
+              </p>
+            )}
+          </div>
+
+          {/* Year range */}
+          <div className="card">
+            <label className="label">Year (from)</label>
+            <input
+              type="number"
+              className="input"
+              value={y0 ?? ''}
+              min={options?.year_min}
+              max={y1 ?? options?.year_max}
+              onChange={(e) => setY0(Number(e.target.value))}
+            />
+          </div>
+          <div className="card">
+            <label className="label">Year (to)</label>
+            <input
+              type="number"
+              className="input"
+              value={y1 ?? ''}
+              min={y0 ?? options?.year_min}
+              max={options?.year_max}
+              onChange={(e) => setY1(Number(e.target.value))}
+            />
+          </div>
+        </div>
+
+        {/* KPIs */}
+        <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <KPI title="Listings" value={num(summary?.rows)} />
+          <KPI title="Median Price" value={usd(summary?.median_price)} />
+          <KPI title="Median Mileage" value={`${num(summary?.median_mileage)} mi`} />
+          <KPI
+            title="Distinct makes / models"
+            value={`${num(summary?.unique_makes)} / ${num(summary?.unique_models)}`}
           />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+        </div>
+
+        {/* Errors */}
+        {err && (
+          <div className="mt-4 rounded-lg border border-red-500 bg-red-500/10 px-4 py-3 text-sm">
+            {err}
+          </div>
+        )}
+
+        {/* Charts */}
+        <div className="mt-6 grid grid-cols-1 gap-5 lg:grid-cols-2">
+          {/* Price distribution */}
+          <div className="card">
+            <div className="section-title mb-3">Price distribution</div>
+            <Chart
+              type="bar"
+              height={320}
+              series={[
+                {
+                  name: 'Listings',
+                  data: charts?.price_hist?.counts || [],
+                },
+              ]}
+              options={{
+                chart: { background: 'transparent', toolbar: { show: false } },
+                theme: { mode: 'dark' },
+                plotOptions: { bar: { columnWidth: '75%', borderRadius: 3 } },
+                dataLabels: { enabled: false },
+                xaxis: {
+                  categories: charts?.price_hist?.bins?.slice(1) || [],
+                  labels: { rotate: 0, formatter: (v: any) => `$${Number(v).toLocaleString()}` },
+                },
+                yaxis: { labels: { formatter: (v: any) => Number(v).toLocaleString() } },
+                colors: [ACCENT],
+                grid: { borderColor: 'rgba(255,255,255,0.1)' },
+              }}
+            />
+          </div>
+
+          {/* Median price by year */}
+          <div className="card">
+            <div className="section-title mb-3">Median price by year</div>
+            <Chart
+              type="area"
+              height={320}
+              series={[
+                {
+                  name: 'Median price',
+                  data:
+                    charts?.price_by_year?.year?.map((y, i) => ({
+                      x: y,
+                      y: charts?.price_by_year?.price?.[i],
+                    })) || [],
+                },
+              ]}
+              options={{
+                chart: { background: 'transparent', toolbar: { show: false } },
+                theme: { mode: 'dark' },
+                dataLabels: { enabled: false },
+                stroke: { width: 2, curve: 'smooth' },
+                xaxis: { labels: { formatter: (v: any) => `${v}` } },
+                yaxis: { labels: { formatter: (v: any) => `$${Number(v).toLocaleString()}` } },
+                colors: [ACCENT],
+                fill: { type: 'gradient', gradient: { shadeIntensity: 0.8, opacityFrom: 0.25, opacityTo: 0.05 } },
+                grid: { borderColor: 'rgba(255,255,255,0.1)' },
+              }}
+            />
+          </div>
+
+          {/* Top models (median price) */}
+          <div className="card">
+            <div className="section-title mb-3">Top 10 models (median price)</div>
+            <Chart
+              type="bar"
+              height={360}
+              series={[
+                {
+                  name: 'Median price',
+                  data: (charts?.top_models?.model || []).map((label, i) => ({
+                    x: label,
+                    y: charts?.top_models?.price?.[i],
+                  })),
+                },
+              ]}
+              options={{
+                chart: { background: 'transparent', toolbar: { show: false } },
+                theme: { mode: 'dark' },
+                plotOptions: { bar: { horizontal: true, barHeight: '70%', borderRadius: 3 } },
+                dataLabels: { enabled: false },
+                xaxis: { labels: { formatter: (v: any) => `$${Number(v).toLocaleString()}` } },
+                colors: [ACCENT],
+                grid: { borderColor: 'rgba(255,255,255,0.1)' },
+              }}
+            />
+          </div>
+
+          {/* Make share (donut) */}
+          <div className="card">
+            <div className="section-title mb-3">Make share</div>
+            <Chart
+              type="donut"
+              height={320}
+              series={charts?.make_share?.count || []}
+              options={{
+                chart: { background: 'transparent' },
+                labels: charts?.make_share?.make || [],
+                legend: { position: 'bottom' },
+                theme: { mode: 'dark' },
+                dataLabels: { enabled: false },
+                stroke: { width: 0 },
+                plotOptions: { pie: { donut: { size: '65%' } } },
+                colors: [ACCENT, ACCENT_SOFT, '#dbffb6', '#eaffd6', '#a7ff83', '#6cff00'],
+              }}
+            />
+          </div>
+
+          {/* Model share (donut) */}
+          <div className="card">
+            <div className="section-title mb-3">Model share</div>
+            <Chart
+              type="donut"
+              height={320}
+              series={charts?.model_share?.count || []}
+              options={{
+                chart: { background: 'transparent' },
+                labels: charts?.model_share?.model || [],
+                legend: { position: 'bottom' },
+                theme: { mode: 'dark' },
+                dataLabels: { enabled: false },
+                stroke: { width: 0 },
+                plotOptions: { pie: { donut: { size: '65%' } } },
+                colors: [ACCENT, ACCENT_SOFT, '#dbffb6', '#eaffd6', '#a7ff83', '#6cff00'],
+              }}
+            />
+          </div>
+        </div>
+
+        {/* Loading overlay */}
+        {loading && (
+          <div className="fixed inset-x-0 bottom-6 flex justify-center">
+            <div className="rounded-full bg-white/5 px-4 py-2 text-sm backdrop-blur">
+              Loading…
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Local styles */}
+      <style jsx global>{`
+        :root { --accent: ${ACCENT}; }
+        .card {
+          background: ${CARD_BG};
+          border: 1px solid rgba(255,255,255,0.08);
+          border-radius: 16px;
+          padding: 16px;
+        }
+        .label {
+          display: block;
+          font-size: 0.82rem;
+          color: #9ca3af;
+          margin-bottom: 6px;
+        }
+        .select, .input {
+          width: 100%;
+          background: rgba(255,255,255,0.06);
+          border: 1px solid rgba(255,255,255,0.08);
+          border-radius: 10px;
+          padding: 10px 12px;
+          outline: none;
+        }
+        .select:focus, .input:focus {
+          border-color: ${ACCENT};
+          box-shadow: 0 0 0 3px ${ACCENT}22;
+        }
+        .section-title {
+          font-weight: 800;
+          letter-spacing: .2px;
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// ---------- Small components ----------
+function KPI({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="card">
+      <div className="text-gray-400 text-xs font-semibold">{title}</div>
+      <div className="mt-1 text-2xl font-extrabold tracking-tight">{value}</div>
+    </div>
+  );
+}
+
+function Badge() {
+  return (
+    <div className="inline-flex select-none items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-gray-300">
+      API: <span className="font-semibold text-[var(--accent,#7CFC00)]">FastAPI</span>
+      <span className="mx-1">•</span>
+      UI: <span className="font-semibold">Next + ApexCharts</span>
     </div>
   );
 }
