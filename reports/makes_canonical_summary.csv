@@ -1,0 +1,249 @@
+make,total,sample_variants
+Ford,21110,Ford
+Chevrolet,20254,"Cheverolet, Chevrolet, Chevy"
+Toyota,6449,Toyota
+Mercedes-Benz,6104,"Mercedes, Mercedes-B, Mercedes-Benz"
+Dodge,5603,"Dodge, Immaculate"
+BMW,5033,Bmw
+Jeep,4437,Jeep
+Cadillac,3576,Cadillac
+Volkswagen,3415,"Volkswagen, Volkswagon, Vw"
+Honda,3234,Honda
+Pontiac,2569,"Pontiac, Pontlac"
+GMC,2460,Gmc
+Nissan,2395,Nissan
+Porsche,2200,Porsche
+Lincoln,1817,Lincoln
+Buick,1733,Buick
+Audi,1484,Audi
+Chrysler,1395,"Chrylser, Chrysler, Crhysler"
+Jaguar,1281,Jaguar
+Subaru,1280,Subaru
+Lexus,1265,Lexus
+Land Rover,1246,"Land, Landrover"
+Plymouth,1029,"Piymouth, Plymouth"
+Volvo,1027,Volvo
+Oldsmobile,965,Oldsmobile
+Mazda,939,Mazda
+Mercury,792,Mercury
+Hyundai,647,Hyundai
+MINI,640,Mini
+Acura,629,Acura
+Mg,561,Mg
+INFINITI,542,"Infiniti, Infinity"
+International Harvester,510,International
+HUMMER,487,Hummer
+Mitsubishi,456,Mitsubishi
+Datsun,443,Datsun
+Saab,420,Saab
+Triumph,410,Triumph
+FIAT,369,Fiat
+Kia,365,Kia
+RAM,362,Ram
+Tesla,333,Tesla
+Amc,284,Amc
+Alfa Romeo,276,Alfa
+Maserati,238,Maserati
+Saturn,237,Saturn
+Bentley,228,Bentley
+Studebaker,224,"Studabaker, Studebaker"
+Rolls-Royce,214,"Rolls, Rolls-Royce"
+Ferrari,210,Ferrari
+Suzuki,197,Suzuki
+Replica Kit Makes,187,Replica/Kit
+Austin Healey,144,"Austin, Austin-Healey"
+Scion,141,Scion
+Isuzu,134,Isuzu
+Willys,118,"Willy'S, Willys"
+smart,104,Smart
+Lotus,101,"Lotus, Other"
+Other Makes,98,Other
+Shelby,85,Shelby
+Aston Martin,80,Aston
+Packard,77,Packard
+Nash,67,Nash
+Lamborghini,66,Lamborghini
+Hudson,59,Hudson
+Geo,52,Geo
+Delorean,44,Delorean
+Austin,39,Austin
+Lancia,37,Lancia
+Opel,37,Opel
+Sunbeam,37,Sunbeam
+Edsel,34,Edsel
+Desoto,34,Desoto
+Renault,22,Renault
+Freightliner,19,"Freightliner, Freightlnr"
+Fisker,18,Fisker
+McLaren,16,Mclaren
+Peugeot,16,Peugeot
+Eagle,14,Eagle
+Morgan,13,Morgan
+De Tomaso,13,De
+AMC,12,"Amc, American"
+Kaiser,12,Kaiser
+Citroën,11,"Citroen, Citroën"
+Morris,10,Morris
+Bugatti,9,Bugatti
+Jensen,9,Jensen
+Daimler,7,Daimler
+Daihatsu,6,Daihatsu
+Genesis,6,Genesis
+Diamond T,6,Diamond
+Stutz,5,Stutz
+Graham,5,Graham
+Am General,5,Am
+Jensen Healey,5,Jensen
+Hillman,4,Hillman
+Rover,4,Rover
+Yugo,4,Yugo
+Reo,4,Reo
+Rambler,4,Rambler
+Pierce Arrow,4,"Pierce, Pierce-Arrow"
+Tvr,4,Tvr
+Zimmer,4,Zimmer
+Excalibur,4,Excalibur
+Coda,4,Coda
+Cord,4,Cord
+Crosley,4,Crosley
+Divco,4,Divco
+Checker,4,Checker
+Sterling,3,Sterling
+Lasalle,3,Lasalle
+Laforza,3,Laforza
+Fiberfab,3,Fiberfab
+Harley Davidson,3,"Harley, Harley-Davidson"
+Avanti,3,Avanti
+Nsu,3,Nsu
+Singer,3,Singer
+Ariel,3,Ariel
+Amphicar,3,Amphicar
+Henney,2,Henney
+Vespa,2,Vespa
+White,2,White
+Willys Overland,2,Willys-Overland
+Vpg,2,Vpg
+Messerschmitt,2,Messerschmitt
+Oreion,2,Oreion
+Qvale,2,Qvale
+Riley,2,Riley
+Asve,2,Asve
+Hupmobile,2,Hupmobile
+Graham Paige,2,Graham-Paige
+Bricklin,2,Bricklin
+Autobianchi,2,Autobianchi
+Maybach,2,Maybach
+Polaris,2,Polaris
+Kandi,2,Kandi
+Dkw,2,Dkw
+Blue Bird,2,Blue
+Corbin,2,Corbin
+American Lafrance,2,American
+Electric,1,Electric
+Dutton Amphibious,1,Dutton
+Divco Model 12,1,Divco
+Dort,1,Dort
+Glas Goggomobil,1,Glas
+Gl550,1,Gl550
+Geo Solectria Force,1,Geo
+Gem,1,Gem
+Healey,1,Healey
+Frazer,1,Frazer
+Frazier,1,Frazier
+Fuldamobil,1,Fuldamobil
+Autocar,1,Autocar
+Auburn,1,Auburn
+American Electric Vehicle,1,American
+Baw,1,Baw
+Beardmore,1,Beardmore
+Bedford,1,Bedford
+Bertone,1,Bertone
+Biscuter,1,Biscuter
+Chariot,1,Chariot
+1964 International,1,1964
+Ac,1,Ac
+Arnolt Mg,1,Arnolt-Mg
+Amercan,1,Amercan
+300,1,300
+Aerodeck,1,Aerodeck
+Alpine,1,Alpine
+Continental,1,Continental
+Camuta,1,Camuta
+Borgward,1,Borgward
+Citroen Ds19,1,Citroen
+Diamond,1,Diamond
+Datsun 510,1,Datsun
+Diamondt Diamond T,1,Diamondt
+Excalibur Series Ii Other,1,Excalibur
+Federal Motors,1,Federal
+Factory Five Racing,1,Factory
+Factory Five,1,Factory
+Exomotive,1,Exomotive
+Fiberfab Avenger Gt40,1,Fiberfab
+Classic Motor Carriages,1,Classic
+Cushman,1,Cushman
+Daihatsu Trimobile,1,Daihatsu
+Jensen Cars,1,Jensen
+Internatonal,1,Internatonal
+Hino,1,Hino
+Hyusung Gt650,1,Hyusung
+Grumman Olson,1,Grumman
+Goggomobil,1,Goggomobil
+Haulmark,1,Haulmark
+Gaz,1,Gaz
+Moke,1,Moke
+Mochet,1,Mochet
+Meyers,1,Meyers
+Meyers Manx,1,Meyers
+Opel Manta,1,Opel
+Oliver,1,Oliver
+Other Makes Diamond T Truck,1,Other
+Msv Mauck,1,Msv
+Maxim,1,Maxim
+Marcos,1,Marcos
+Marathon,1,Marathon
+Lada,1,Lada
+Kaufman,1,Kaufman
+Kawasaki,1,Kawasaki
+Kenworth,1,Kenworth
+King Midget,1,King
+Local Motors,1,Local
+Maxwell,1,Maxwell
+Meccanica,1,Meccanica
+Lti,1,Lti
+Metz,1,Metz
+Morris Minor,1,Morris
+Mosler,1,Mosler
+Merkur,1,Merkur
+Pmag Burning Man,1,Pmag
+Pagoda,1,Pagoda
+Panhard,1,Panhard
+Peterbilt,1,Peterbilt
+Suburu,1,Suburu
+Steyr Puch,1,Steyr
+Speedster,1,Speedster
+Rover Range Rover,1,Rover
+Reliant,1,Reliant
+Puma,1,Puma
+Predator Gsxr 750,1,Predator
+Smith Electric,1,Smith
+Siata,1,Siata
+Seagrave Fire Apparatus,1,Seagrave
+Reo Speedwagon,1,Reo
+Thoroughbred,1,Thoroughbred
+Vanguard,1,Vanguard
+Valiant,1,Valiant
+Unimog,1,Unimog
+Uhaul,1,Uhaul
+Tucson,1,Tucson
+Triumph Tr6,1,Triumph
+Tiger,1,Tiger
+Tomberlin,1,Tomberlin
+Superformance,1,Superformance
+Think,1,Think
+Vega,1,Vega
+Vintage Sprint,1,Vintage
+Whippet,1,Whippet
+Wheego Whip Electra Car,1,Wheego
+Yamaha,1,Yamaha
+Zimmer Golden Spirit Coupe,1,Zimmer

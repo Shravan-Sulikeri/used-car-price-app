@@ -3,8 +3,6 @@ import json, re, unicodedata
 from pathlib import Path
 import numpy as np
 import pandas as pd
-import sys; sys.path.append("model")
-from standardize_makes import canonicalize_make
 
 CLEAN_PATH = Path("data/clean_used_cars.csv")
 REPORT_PATH = Path("model/make_cleaning_report.json")
