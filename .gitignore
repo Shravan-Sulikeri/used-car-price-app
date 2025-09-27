@@ -1,14 +1,29 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
 
-data/
-model/*.pkl
-!model/preprocessor.pkl
-.ipynb_checkpoints/
-**/__pycache__/
+# Data (keep only a tiny sample if you want)
+data/**/*
+!data/README.md
+!data/clean_used_cars.csv   # keep the one small canonical CSV (edit if you prefer)
+!data/sample.csv
 
-# data + model artifacts
-data/**/*.csv
-data/**/*.zip
-model/*.pkl
-model/preview_*.csv
-**/__pycache__/
+# Models (don’t commit binaries)
+model/**/*.pkl
+model/**/*.onnx
+model/**/*.joblib
+
+# Notebooks & caches
 **/.ipynb_checkpoints/
+*.ipynb_convert_*.json
+
+# Node / Next.js
+node_modules/
+frontend/node_modules/
+frontend/.next/
+*.log
+
+# Misc
+.DS_Store
+web_backup_*/
