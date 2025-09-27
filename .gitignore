@@ -4,3 +4,11 @@ model/*.pkl
 !model/preprocessor.pkl
 .ipynb_checkpoints/
 **/__pycache__/
+
+# data + model artifacts
+data/**/*.csv
+data/**/*.zip
+model/*.pkl
+model/preview_*.csv
+**/__pycache__/
+**/.ipynb_checkpoints/

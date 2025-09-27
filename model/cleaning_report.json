@@ -1,28 +1,55 @@
 {
-  "raw_rows": 122144,
-  "deduped_and_filtered_rows": 116624,
-  "dropped_rows_percent": 4.52,
-  "ref_year_used": 2025,
+  "raw_rows": 2068,
+  "rows_after_filters": 2053,
+  "dropped_rows_percent": 0.73,
+  "reference_year_used": 2025,
+  "input_csv": "data/new/used_car_listings.csv",
+  "mileage_unit_detected": "miles",
+  "converted_km_to_miles": false,
+  "column_mapping": {
+    "price": "price",
+    "year": "year",
+    "mileage": "mileage",
+    "make": "make",
+    "model": "model",
+    "fuel_type": "fuel",
+    "transmission": "transmission",
+    "condition": "condition",
+    "body_type": "body",
+    "seller_type": "seller_type"
+  },
   "kept_columns": [
     "price",
     "year",
     "mileage",
     "make",
     "model",
+    "fuel",
+    "transmission",
+    "condition",
     "body",
+    "seller_type",
     "age",
     "mileage_per_year",
     "high_mileage"
   ],
+  "unique_makes_after": 16,
   "numeric_features": [
     "year",
     "mileage",
     "age",
     "mileage_per_year"
   ],
-  "low_card_cats": [],
+  "low_card_cats": [
+    "fuel",
+    "transmission",
+    "condition",
+    "seller_type",
+    "body"
+  ],
   "high_card_cats": [
     "make",
     "model"
-  ]
+  ],
+  "hashing_used": true
 }
