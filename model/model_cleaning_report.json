@@ -1,0 +1,33 @@
+{
+  "unique_models_before": 3906,
+  "unique_models_after": 3602,
+  "top20_models_before": {
+    "mustang": 4306,
+    "corvette": 3113,
+    "f-150": 2510,
+    "camaro": 2077,
+    "other": 1844,
+    "f-250": 1828,
+    "wrangler": 1712,
+    "other pickups": 1674,
+    "3-series": 1423,
+    "c-10": 1348,
+    "impala": 1254,
+    "sl-class": 1172,
+    "silverado 1500": 1168,
+    "bronco": 1074,
+    "f-350": 1046,
+    "e-series van": 1031,
+    "civic": 989,
+    "911": 871,
+    "charger": 820,
+    "accord": 811
+  },
+  "examples": {
+    "bmw 335i ->": "3-Series",
+    "mercedes c300 ->": "C-Class",
+    "f150 ->": "F-150",
+    "f 150 ->": "F-150",
+    "silverado1500 ->": "Silverado 1500"
+  }
+}
