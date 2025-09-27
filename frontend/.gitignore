@@ -85,3 +85,21 @@ web_backup_*/
 data/*.json
 reports/
 catboost_info/
+
+# Node / Next leftovers
+node_modules/
+.next/
+frontend/
+web_backup_*/
+
+# Build/logs
+catboost_info/
+reports/
+
+# Big local data & exports
+*.feather
+*.parquet
+*.sqlite
+*.zip
+*.7z
+*.tar.gz
