@@ -39,3 +39,32 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# --- Node & Next.js (removed) ---
+node_modules/
+.next/
+public/
+src/
+package.json
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+next.config.ts
+next-env.d.ts
+tsconfig.json
+postcss.config.mjs
+tailwind.config.mjs
+eslint.config.mjs
+
+# --- Dash / misc caches ---
+__pycache__/
+.ipynb_checkpoints/
+
+# --- Large artifacts / logs (keep models & reports small) ---
+catboost_info/
+web_backup_*/
+*.log
+
+# --- Data: keep only the cleaned CSV you serve ---
+data/**
+!data/clean_used_cars.csv
