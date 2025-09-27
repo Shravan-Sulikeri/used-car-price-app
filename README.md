@@ -16,13 +16,31 @@
 </p>
 
 ---
+## Live repo metrics
+
 <p align="center">
-  <!-- Repo activity -->
-  <img alt="Last Commit" src="https://img.shields.io/github/last-commit/Shravan-Sulikeri/used-car-price-app">
+  <!-- Activity -->
+  <a href="https://github.com/Shravan-Sulikeri/used-car-price-app/commits/main">
+    <img alt="Last Commit" src="https://img.shields.io/github/last-commit/Shravan-Sulikeri/used-car-price-app?logo=github">
+  </a>
   <img alt="Commit Activity" src="https://img.shields.io/github/commit-activity/m/Shravan-Sulikeri/used-car-price-app">
-  <img alt="Open Issues" src="https://img.shields.io/github/issues/Shravan-Sulikeri/used-car-price-app">
+  <a href="https://github.com/Shravan-Sulikeri/used-car-price-app/issues">
+    <img alt="Open Issues" src="https://img.shields.io/github/issues/Shravan-Sulikeri/used-car-price-app">
+  </a>
+  <a href="https://github.com/Shravan-Sulikeri/used-car-price-app/pulls">
+    <img alt="Open PRs" src="https://img.shields.io/github/issues-pr/Shravan-Sulikeri/used-car-price-app">
+  </a>
+  <!-- Popularity -->
+  <a href="https://github.com/Shravan-Sulikeri/used-car-price-app/stargazers">
+    <img alt="Stars" src="https://img.shields.io/github/stars/Shravan-Sulikeri/used-car-price-app">
+  </a>
+  <a href="https://github.com/Shravan-Sulikeri/used-car-price-app/network/members">
+    <img alt="Forks" src="https://img.shields.io/github/forks/Shravan-Sulikeri/used-car-price-app">
+  </a>
+  <!-- Code -->
   <img alt="Top Language" src="https://img.shields.io/github/languages/top/Shravan-Sulikeri/used-car-price-app">
   <img alt="Repo Size" src="https://img.shields.io/github/repo-size/Shravan-Sulikeri/used-car-price-app">
+  <img alt="Contributors" src="https://img.shields.io/github/contributors/Shravan-Sulikeri/used-car-price-app?logo=github">
 </p>
 
 
