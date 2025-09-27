@@ -120,16 +120,6 @@ This project consolidates messy variants (e.g., `bmw 335i`, `mercedes benz`, `vo
 | `chrylser`, `crhysler`     | **Chrysler**     |
 | `studabaker`               | **Studebaker**   |
 
-**Reproduce**
-```bash
-# CLI (idempotent)
-python model/standardize_makes.py
-
-# Notebook workflow
-# See: notebooks/01_clean_makes.ipynb
-# - Inspect variants
-# - (Optionally) edit a CSV mapping
-# - Apply & save
 
 ---
 
