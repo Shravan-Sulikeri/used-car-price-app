@@ -1,158 +1,236 @@
 # api/main.py
-import os
-from pathlib import Path
-from typing import Optional, Dict, Any
+# -*- coding: utf-8 -*-
+from __future__ import annotations
 
-import joblib
+from pathlib import Path
+from typing import Dict, List, Optional, Any
+from datetime import datetime
+import os
+import json
+
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI
+import joblib
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, Field
 
-# -------- Config --------
-DATA_PATH = os.getenv("DATA_CSV", "data/clean_used_cars.csv")
-MODEL_PATH = os.getenv("MODEL_PATH", "model/model_gbm.pkl")
+# ----------------------------
+# Paths / config
+# ----------------------------
+ROOT = Path(__file__).resolve().parents[1]
+DATA_PATH = Path(os.getenv("DATA_CSV", ROOT / "data" / "clean_used_cars.csv"))
+PREPROC_PATH = Path(os.getenv("PREPROCESSOR_PKL", ROOT / "model" / "preprocessor.pkl"))
+MODEL_PATH = Path(os.getenv("MODEL_PKL", ROOT / "model" / "model_gbm.pkl"))
 
-# -------- Robust CSV/Excel loader --------
-def read_table_smart(path: str) -> pd.DataFrame:
-    p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(f"Data file not found: {p}")
+# If you trained on log(price) set to "1"
+USE_LOG_TARGET = bool(int(os.getenv("PRICE_MODEL_LOG", "1")))
 
-    # Excel?
-    if p.suffix.lower() in {".xlsx", ".xls"}:
-        return pd.read_excel(p)
+# Features expected by the trained preprocessor/model
+BASE_FEATS = ["year", "mileage", "make", "model", "body"]
+ENG_FEATS  = ["age", "mileage_per_year", "high_mileage"]
+MODEL_FEATS = ["year","mileage","age","mileage_per_year","high_mileage","make","model","body"]
 
-    # Try python engine first (can infer delimiter). DO NOT pass low_memory here.
-    encodings = ["utf-8", "utf-8-sig", "utf-16", "utf-16-le", "cp1252", "latin1"]
-    last_err = None
-    for enc in encodings:
-        try:
-            return pd.read_csv(p, engine="python", sep=None, encoding=enc)
-        except Exception as e:
-            last_err = e
-
-    # Fall back to C engine with explicit seps (low_memory OK here)
-    for enc in encodings:
-        for sep in [",", ";", "\t", "|"]:
-            try:
-                return pd.read_csv(p, engine="c", sep=sep, encoding=enc, low_memory=False)
-            except Exception as e:
-                last_err = e
-
-    raise RuntimeError(f"Could not parse {p}. Last error: {last_err}")
-
-# -------- Load data/model once --------
-df = read_table_smart(DATA_PATH)
-
-try:
-    MODEL = joblib.load(MODEL_PATH)
-except Exception as e:
-    MODEL = None
-    print("[WARN] Model not loaded:", e)
-
-# -------- FastAPI app --------
-app = FastAPI(title="Used Car Price API", version="1.0")
+# ----------------------------
+# App
+# ----------------------------
+app = FastAPI(title="Used Car Price API", version="0.2")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
+    allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
 )
 
-# -------- Helpers --------
-def apply_filters(
-    base: pd.DataFrame,
-    make: Optional[str], model: Optional[str], body: Optional[str],
-    y0: Optional[int], y1: Optional[int]
-) -> pd.DataFrame:
-    d = base
-    if make and "make" in d:
-        d = d[d["make"].astype(str) == make]
-    if model and "model" in d:
-        d = d[d["model"].astype(str) == model]
-    if body and "body" in d:
-        d = d[d["body"].astype(str) == body]
-    if y0 is not None and y1 is not None and "year" in d:
-        d = d[d["year"].between(int(y0), int(y1))]
-    return d
+# ----------------------------
+# Load data + artifacts
+# ----------------------------
+def _read_csv_safe(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        raise FileNotFoundError(f"Data file not found: {path}")
+    return pd.read_csv(path, low_memory=False)
 
-# -------- Routes --------
+try:
+    df: pd.DataFrame = _read_csv_safe(DATA_PATH)
+except Exception as e:
+    df = pd.DataFrame(columns=["price"] + MODEL_FEATS)
+    print(f"[WARN] Could not load data: {e}")
+
+def _safe_load_joblib(path: Path):
+    try:
+        return joblib.load(path)
+    except Exception as e:
+        print(f"[WARN] Could not load artifact {path}: {e}")
+        return None
+
+PREPROCESSOR = _safe_load_joblib(PREPROC_PATH)
+MODEL = _safe_load_joblib(MODEL_PATH)
+
+def _infer_ref_year(frame: pd.DataFrame) -> int:
+    now_y = datetime.utcnow().year
+    if "year" in frame.columns and frame["year"].dropna().size:
+        return int(max(now_y, frame["year"].max()))
+    return now_y
+
+REF_YEAR = _infer_ref_year(df)
+
+# ----------------------------
+# Schemas
+# ----------------------------
+class PredictIn(BaseModel):
+    year: int = Field(..., ge=1980, le=2100)
+    mileage: int = Field(..., ge=0, le=1_000_000)
+    make: str
+    model: str
+    body: Optional[str] = None
+
+class PredictOut(BaseModel):
+    ok: bool
+    price_usd: Optional[float] = None
+    details: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+# ----------------------------
+# Helpers
+# ----------------------------
+def check_ready() -> None:
+    if MODEL is None or PREPROCESSOR is None:
+        raise HTTPException(status_code=503, detail="Model or preprocessor not loaded")
+
+def _engineer_features(year: int, mileage: float) -> Dict[str, Any]:
+    age = max(0, int(REF_YEAR) - int(year))
+    # avoid div by zero; if age==0, use mileage as per-year proxy
+    mpy = float(mileage) / max(age, 1)
+    high = int((mileage > 150_000) or (mpy > 20_000))
+    return {"age": age, "mileage_per_year": mpy, "high_mileage": high}
+
+def _make_feature_row(req: PredictIn) -> pd.DataFrame:
+    eng = _engineer_features(req.year, req.mileage)
+    row = {
+        "year": int(req.year),
+        "mileage": int(req.mileage),
+        "make": (req.make or "").strip(),
+        "model": (req.model or "").strip(),
+        "body": (req.body if req.body not in ("", "null", "None") else None),
+        **eng,
+    }
+    # Ensure all model features exist, in a stable order
+    for c in MODEL_FEATS:
+        row.setdefault(c, None)
+    return pd.DataFrame([row], columns=MODEL_FEATS)
+
+def _filter_frame(
+    make: Optional[str] = None,
+    model: Optional[str] = None,
+    y0: Optional[int] = None,
+    y1: Optional[int] = None,
+) -> pd.DataFrame:
+    m = pd.Series([True] * len(df))
+    if y0 is not None and y1 is not None and "year" in df.columns:
+        m &= df["year"].between(y0, y1)
+    if make:
+        m &= df["make"].astype(str).str.casefold().eq(make.casefold())
+    if model and "model" in df.columns:
+        m &= df["model"].astype(str).str.casefold().eq(model.casefold())
+    return df.loc[m].copy()
+
+def _hist(series: pd.Series, bins: int = 30) -> Dict[str, List[float]]:
+    x = series.dropna().astype(float).values
+    if x.size == 0:
+        return {"bins": [], "counts": []}
+    counts, edges = np.histogram(x, bins=bins)
+    return {"bins": edges[:-1].round(0).astype(int).tolist(), "counts": counts.tolist()}
+
+# ----------------------------
+# Routes
+# ----------------------------
+@app.get("/", include_in_schema=False)
+def root():
+    return RedirectResponse(url="/docs")
+
 @app.get("/health")
-def health() -> Dict[str, Any]:
-    return {
+def health():
+    info = {
         "status": "ok",
         "rows": int(len(df)),
-        "cols": df.columns.tolist(),
+        "cols": list(df.columns),
+        "ref_year": int(REF_YEAR),
         "model_loaded": MODEL is not None,
-        "data_path": DATA_PATH,
-        "model_path": MODEL_PATH,
+        "preprocessor_loaded": PREPROCESSOR is not None,
+        "data_path": str(DATA_PATH.resolve()),
+        "model_path": str(MODEL_PATH.resolve()),
     }
+    return info
 
 @app.get("/options")
-def options(make: Optional[str] = None) -> Dict[str, Any]:
-    d = df
-    makes = sorted(d["make"].dropna().astype(str).unique().tolist()) if "make" in d else []
-    if make and "model" in d:
-        models = sorted(d.loc[d["make"].astype(str) == make, "model"].dropna().astype(str).unique().tolist())
-    else:
-        models = sorted(d["model"].dropna().astype(str).unique().tolist()) if "model" in d else []
-    bodies = sorted(d["body"].dropna().astype(str).unique().tolist()) if "body" in d else []
-    years = (int(d["year"].min()), int(d["year"].max())) if "year" in d else (None, None)
-    return {"makes": makes, "models": models, "bodies": bodies, "year_min": years[0], "year_max": years[1]}
+def options():
+    makes = sorted(map(str, df["make"].dropna().unique())) if "make" in df.columns else []
+    models = sorted(map(str, df["model"].dropna().unique())) if "model" in df.columns else []
+    bodies = sorted(map(str, df["body"].dropna().unique())) if "body" in df.columns else []
+
+    models_by_make: Dict[str, List[str]] = {}
+    if "make" in df.columns and "model" in df.columns:
+        for mk, g in df.groupby("make"):
+            models_by_make[str(mk)] = sorted(map(str, g["model"].dropna().unique()))
+
+    y0 = int(df["year"].min()) if "year" in df.columns and len(df) else None
+    y1 = int(df["year"].max()) if "year" in df.columns and len(df) else None
+
+    return {
+        "makes": makes,
+        "models": models,
+        "models_by_make": models_by_make,
+        "bodies": bodies,
+        "year_min": y0,
+        "year_max": y1,
+    }
 
 @app.get("/summary")
 def summary(
-    make: Optional[str] = None, model: Optional[str] = None, body: Optional[str] = None,
-    y0: Optional[int] = None, y1: Optional[int] = None
-) -> Dict[str, Any]:
-    d = apply_filters(df, make, model, body, y0, y1)
-    return {
-        "rows": int(len(d)),
-        "median_price": float(d["price"].median()) if "price" in d else None,
-        "median_mileage": float(d["mileage"].median()) if "mileage" in d else None,
-        "unique_makes": int(d["make"].nunique()) if "make" in d else None,
-        "unique_models": int(d["model"].nunique()) if "model" in d else None,
+    make: Optional[str] = None,
+    model: Optional[str] = None,
+    y0: Optional[int] = Query(None, ge=1900, le=2100),
+    y1: Optional[int] = Query(None, ge=1900, le=2100),
+):
+    dff = _filter_frame(make, model, y0, y1)
+    resp = {
+        "rows": int(len(dff)),
+        "median_price": int(dff["price"].median()) if "price" in dff.columns and len(dff) else None,
+        "median_mileage": int(dff["mileage"].median()) if "mileage" in dff.columns and len(dff) else None,
+        "unique_makes": int(dff["make"].nunique()) if "make" in dff.columns else None,
+        "unique_models": int(dff["model"].nunique()) if "model" in dff.columns else None,
     }
+    return resp
 
 @app.get("/charts")
 def charts(
-    make: Optional[str] = None, model: Optional[str] = None, body: Optional[str] = None,
-    y0: Optional[int] = None, y1: Optional[int] = None
-) -> Dict[str, Any]:
-    d = apply_filters(df, make, model, body, y0, y1)
+    make: Optional[str] = None,
+    model: Optional[str] = None,
+    y0: Optional[int] = Query(None, ge=1900, le=2100),
+    y1: Optional[int] = Query(None, ge=1900, le=2100),
+):
+    dff = _filter_frame(make, model, y0, y1)
 
-    # Price histogram (cap at 99th pct for display)
-    if "price" in d:
-        hi = min(200_000, float(d["price"].quantile(0.99)))
-        bins = np.linspace(0, max(1000, hi), 30)
-        hist, edges = np.histogram(d["price"], bins=bins)
-        price_hist = {"bins": edges[:-1].round(0).tolist(), "counts": hist.tolist()}
-    else:
-        price_hist = {"bins": [], "counts": []}
+    price_hist = _hist(dff["price"], bins=30) if "price" in dff.columns else {"bins": [], "counts": []}
 
-    # Median price by year
-    if {"year", "price"}.issubset(d.columns):
-        by_year = d.groupby("year")["price"].median().reset_index()
-        price_by_year = {"year": by_year["year"].astype(int).tolist(), "price": by_year["price"].round(0).tolist()}
-    else:
-        price_by_year = {"year": [], "price": []}
+    price_by_year = {"year": [], "price": []}
+    if "price" in dff.columns and "year" in dff.columns:
+        tmp = dff.groupby("year")["price"].median().sort_index()
+        price_by_year = {"year": tmp.index.astype(int).tolist(), "price": tmp.round(0).astype(int).tolist()}
 
-    # Top models by median price
-    if {"model", "price"}.issubset(d.columns):
-        top = d.groupby("model")["price"].median().sort_values(ascending=False).head(10).sort_values()
-        top_models = {"model": top.index.astype(str).tolist(), "price": top.round(0).tolist()}
-    else:
-        top_models = {"model": [], "price": []}
+    top_models = {"model": [], "price": []}
+    if "model" in dff.columns and "price" in dff.columns:
+        med = dff.groupby("model")["price"].median().sort_values(ascending=False).head(10).sort_values()
+        top_models = {"model": med.index.tolist(), "price": med.round(0).astype(int).tolist()}
 
-    # Donuts
     make_share = {"make": [], "count": []}
+    if "make" in dff.columns:
+        vc = dff["make"].value_counts().head(10)
+        make_share = {"make": vc.index.tolist(), "count": vc.tolist()}
+
     model_share = {"model": [], "count": []}
-    if "make" in d:
-        ms = d["make"].value_counts().head(10)
-        make_share = {"make": ms.index.astype(str).tolist(), "count": ms.values.tolist()}
-    if "model" in d:
-        mo = d["model"].value_counts().head(10)
-        model_share = {"model": mo.index.astype(str).tolist(), "count": mo.values.tolist()}
+    if "model" in dff.columns:
+        vc2 = dff["model"].value_counts().head(10)
+        model_share = {"model": vc2.index.tolist(), "count": vc2.tolist()}
 
     return {
         "price_hist": price_hist,
@@ -161,47 +239,16 @@ def charts(
         "make_share": make_share,
         "model_share": model_share,
     }
-from fastapi.responses import RedirectResponse, Response
 
-@app.get("/", include_in_schema=False)
-def root():
-    # redirect people who hit '/' to the docs
-    return RedirectResponse("/docs")
+@app.post("/predict", response_model=PredictOut)
+def predict(req: PredictIn):
+    check_ready()
+    try:
+        X = _make_feature_row(req)             # includes engineered cols
+        Z = PREPROCESSOR.transform(X)          # transform with fitted ColumnTransformer
+        yhat = MODEL.predict(Z)
 
-@app.get("/favicon.ico", include_in_schema=False)
-def favicon():
-    # avoid noisy 404s for the browser's favicon request
-    return Response(status_code=204)
-
-# ---------- Prediction ----------
-class PredictIn(BaseModel):
-    year: Optional[int] = None
-    mileage: Optional[float] = None
-    make: Optional[str] = None
-    model: Optional[str] = None
-    body: Optional[str] = None
-    fuel: Optional[str] = None
-    transmission: Optional[str] = None
-    seller_type: Optional[str] = None
-    state: Optional[str] = None
-
-@app.post("/predict")
-def predict(p: PredictIn) -> Dict[str, Any]:
-    if MODEL is None:
-        return {"ok": False, "error": "Model not loaded"}
-
-    ref_year = int(df["year"].median()) if "year" in df else 2020
-    age = max(0, (ref_year - (p.year or ref_year)))
-    mpyear = (p.mileage or 0) / (age if age >= 1 else 1)
-    high_m = 1 if (p.mileage or 0) > 150_000 else 0
-
-    row = {
-        "year": p.year, "mileage": p.mileage, "make": p.make, "model": p.model,
-        "body": p.body, "fuel": p.fuel, "transmission": p.transmission,
-        "seller_type": p.seller_type, "state": p.state,
-        "age": age, "mileage_per_year": mpyear, "high_mileage": high_m,
-    }
-    X = pd.DataFrame([row])
-    yhat = MODEL.predict(X)
-    yhat = float(np.expm1(yhat[0] if isinstance(yhat, (list, np.ndarray)) else yhat))
-    return {"ok": True, "pred_price": round(yhat, 2)}
+        price = float(np.exp(yhat[0])) if USE_LOG_TARGET else float(yhat[0])
+        return PredictOut(ok=True, price_usd=price, details={"inputs": X.iloc[0].to_dict()})
+    except Exception as e:
+        return PredictOut(ok=False, error=f"inference_error: {e}")
