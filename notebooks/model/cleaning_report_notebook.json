@@ -1,0 +1,42 @@
+{
+  "source_file": "cars.csv",
+  "rows_final": 54346,
+  "cols": [
+    "make",
+    "model",
+    "year",
+    "Status",
+    "mileage",
+    "Dealer",
+    "price",
+    "age",
+    "mileage_per_year",
+    "high_mileage"
+  ],
+  "ref_year": 2025,
+  "filters": {
+    "price_range": [
+      500,
+      250000
+    ],
+    "mileage_range": [
+      0,
+      500000
+    ],
+    "year_range": [
+      1980,
+      2026
+    ],
+    "rare_model_min_support": 15
+  },
+  "units": {
+    "mileage": "miles"
+  },
+  "feature_engineering": [
+    "age",
+    "mileage_per_year",
+    "high_mileage"
+  ],
+  "unique_makes": 50,
+  "unique_models": 370
+}
