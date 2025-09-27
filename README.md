@@ -92,6 +92,47 @@
 | LightGBM  | **5,826** | **10,898** | **0.339** |
 
 ---
+## Data Quality — Make Canonicalization
+
+Cleaning raw **make** values dramatically improves consistency and model signal.  
+This project consolidates messy variants (e.g., `bmw 335i`, `mercedes benz`, `volkswagon`, `chevy`, `studabaker`) to clean, branded forms.
+
+**How it works**
+- Normalization (case, punctuation, spacing)
+- Synonym + misspelling rules (e.g., `vw → Volkswagen`, `chevy → Chevrolet`, `infinity → INFINITI`)
+- Two-word brand detection (e.g., `mercedes benz → Mercedes-Benz`, `land rover → Land Rover`)
+- Token fallback for title-like strings (e.g., `cadillac only 80k → Cadillac`)
+
+**Artifacts**
+- Report: [`model/make_cleaning_report.json`](model/make_cleaning_report.json)  
+- Summary table: [`reports/makes_canonical_summary.csv`](reports/makes_canonical_summary.csv)
+
+**Examples (before → after)**
+
+| Raw                         | Canonical        |
+|----------------------------|------------------|
+| `bmw 335i`                 | **BMW**          |
+| `mercedes benz`            | **Mercedes-Benz**|
+| `volkswagon`, `vw`         | **Volkswagen**   |
+| `chevy`                    | **Chevrolet**    |
+| `landrover`, `range rover` | **Land Rover**   |
+| `infinity`                 | **INFINITI**     |
+| `chrylser`, `crhysler`     | **Chrysler**     |
+| `studabaker`               | **Studebaker**   |
+
+**Reproduce**
+```bash
+# CLI (idempotent)
+python model/standardize_makes.py
+
+# Notebook workflow
+# See: notebooks/01_clean_makes.ipynb
+# - Inspect variants
+# - (Optionally) edit a CSV mapping
+# - Apply & save
+
+---
+
 
 ## Dashboard
 
