@@ -27,3 +27,7 @@ frontend/.next/
 # Misc
 .DS_Store
 web_backup_*/
+
+# training logs & notebook data
+catboost_info/
+notebooks/data/
