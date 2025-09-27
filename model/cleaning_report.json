@@ -1,43 +1,37 @@
 {
-  "input_csv": "data/new/cars.csv",
-  "raw_rows": 144867,
-  "rows_after_basic_filters": 55551,
-  "rows_final": 54395,
-  "dropped_rows_percent": 62.45,
-  "reference_year_used": 2025,
-  "mileage_unit_detected": "miles",
-  "converted_km_to_miles": false,
-  "column_mapping": {
-    "Price": "price",
-    "Year": "year",
-    "Mileage": "mileage",
-    "Brand": "make",
-    "Model": "model"
-  },
-  "price_source_column": "Price",
+  "input_file": "data/new/used_car_listings.csv",
+  "output_file": "/workspaces/used-car-price-app/data/clean_used_cars.csv",
+  "preprocessor_file": "/workspaces/used-car-price-app/model/preprocessor.pkl",
+  "raw_rows": 2068,
+  "final_rows": 2068,
+  "dropped_rows_percent": 0.0,
+  "ref_year_used": 2025,
   "kept_columns": [
     "price",
     "year",
     "mileage",
     "make",
     "model",
+    "body",
     "age",
     "mileage_per_year",
     "high_mileage"
   ],
-  "unique_makes_after": 50,
-  "min_model_support": 15,
-  "dropped_rare_models_rows": 1156,
   "numeric_features": [
     "year",
     "mileage",
     "age",
     "mileage_per_year"
   ],
-  "low_card_cats": [],
-  "high_card_cats_hashing": [
+  "low_card_cats": [
+    "body"
+  ],
+  "high_card_cats": [
     "make",
     "model"
   ],
-  "hashing_used": true
+  "unique_makes": 16,
+  "unique_models": 65,
+  "median_price": 5448,
+  "median_mileage": 99212
 }

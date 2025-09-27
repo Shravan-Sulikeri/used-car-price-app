@@ -1,383 +1,397 @@
-# model/clean_and_preprocess.py
+# -*- coding: utf-8 -*-
 """
-Robust cleaner & preprocessor for used-car listings.
+Clean used-car data + fit preprocessing transformer.
 
-- Reads source from env DATA_CSV (fallback: data/used_car_sales.csv)
-- Smart CSV/XLSX reader (encodings + separators)
-- Flexible schema detection (price/year/mileage/make/model/…)
-- Price parsing ($, commas, "12.3k"), km→miles conversion
-- Make canonicalization (BMW, Mercedes-Benz, Volkswagen, …)
+- Robust CSV reader (UTF-8/UTF-16/CP1252; comma/semicolon/tab/pipe)
+- Column normalization: price/year/mileage/make/model/body
+- Make canonicalization (BMW, Mercedes-Benz, Volkswagen, Chevrolet, ...)
 - Feature engineering: age, mileage_per_year, high_mileage
-- Filters extremes; drops rare models (< MIN_MODEL_SUPPORT, default 15)
-- Saves: data/clean_used_cars.csv, model/preprocessor.pkl, model/cleaning_report.json
-"""
+- Preprocessor:
+    * Numeric -> median imputer
+    * Low-card categorical -> Constant impute + OneHotEncoder
+    * High-card categorical (make/model) -> Constant impute + HashingEncoder
+      (no pd.NA passed into encoders; dtype kept numeric)
 
+Artifacts:
+- data/clean_used_cars.csv (override via OUT_CSV)
+- model/preprocessor.pkl
+- model/cleaning_report.json
+"""
 from __future__ import annotations
-import os, re, json, unicodedata, math
+
+import json
+import math
+import os
 from pathlib import Path
-from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-import joblib
 
+# sklearn
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 
-# Optional: high-card hashing
+# category_encoders
 try:
     from category_encoders.hashing import HashingEncoder
-    HAVE_HASHING = True
-except Exception:
-    HAVE_HASHING = False
+except ImportError as e:
+    raise SystemExit(
+        "Missing dependency 'category-encoders'. Install with:\n"
+        "  pip install category-encoders"
+    ) from e
 
-# Optional: your previous canonicalizer (if present in repo)
-try:
-    from standardize_makes import canonicalize_make as _canon_make
-    CANON_MAKE_FUNC = _canon_make
-except Exception:
-    CANON_MAKE_FUNC = None
 
-# -------------------- Config / Paths --------------------
-RAW_PATH = os.getenv("DATA_CSV") or "data/used_car_sales.csv"
-CLEAN_PATH = "data/clean_used_cars.csv"
-PREPROC_PATH = "model/preprocessor.pkl"
-REPORT_PATH = "model/cleaning_report.json"
-MIN_MODEL_SUPPORT = int(os.getenv("MIN_MODEL_SUPPORT", "15"))  # drop models with fewer rows than this
+# ------------------------- paths & runtime options -------------------------
 
-# -------------------- Smart reader ----------------------
-def read_table_smart(path: Path) -> pd.DataFrame:
-    """
-    Robust CSV/XLSX reader:
-    - Detects BOM (utf-16-le/be, utf-8-sig)
-    - Sniffs delimiter (comma/semicolon/tab/pipe)
-    - Falls back to a grid of encodings × seps
-    """
-    import csv
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-    sfx = path.suffix.lower()
-    if sfx in (".xlsx", ".xls"):
-        return pd.read_excel(path)
-
-    # --- Peek header bytes
-    with open(path, "rb") as fb:
-        head = fb.read(256 * 1024)
-
-    # --- Encoding guess from BOM
-    enc_guess = None
-    if head.startswith(b"\xff\xfe"):
-        enc_guess = "utf-16-le"
-    elif head.startswith(b"\xfe\xff"):
-        enc_guess = "utf-16-be"
-    elif head.startswith(b"\xef\xbb\xbf"):
-        enc_guess = "utf-8-sig"
-
-    # --- Delimiter sniff
-    try:
-        sample_txt = head.decode(enc_guess or "utf-8", errors="replace")
-        dialect = csv.Sniffer().sniff(sample_txt, delimiters=[",", ";", "\t", "|"])
-        sep_guess = dialect.delimiter
-    except Exception:
-        sep_guess = None
-
-    # --- Try guessed combo first, then a grid
-    tries = []
-    if enc_guess or sep_guess:
-        tries.append((enc_guess or "utf-8", sep_guess or ","))
-
-    encodings = ["utf-8", "utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "latin1"]
-    seps = [",", ";", "\t", "|"]
-    for e in encodings:
-        for s in seps:
-            if (e, s) not in tries:
-                tries.append((e, s))
-
-    last_err = None
-    for e, s in tries:
-        try:
-            df = pd.read_csv(path, encoding=e, sep=s)  # no engine arg
-            if df.shape[1] > 1:
-                return df
-        except Exception as err:
-            last_err = err
-            continue
-
-    raise RuntimeError(f"Failed to parse {path}. Last error: {last_err}")
-
-# -------------------- Utilities -------------------------
-def _norm(s: str) -> str:
-    s = unicodedata.normalize("NFKD", str(s))
-    s = s.lower()
-    s = re.sub(r"[^a-z0-9]+", " ", s)
-    return re.sub(r"\s+", " ", s).strip()
-
-def find_col(candidates, cols):
-    norm_cols = {_norm(c): c for c in cols}
-    for cand in candidates:
-        n = _norm(cand)
-        if n in norm_cols:
-            return norm_cols[n]
-        # loose contains (selling price inside 'final selling price (usd)')
-        for nc, orig in norm_cols.items():
-            if n and n in nc:
-                return orig
-    return None
-
-def parse_price_series(s: pd.Series) -> pd.Series:
-    """Turn strings like '$12,300', '12.3k', '€ 5.000' into floats (USD-ish)."""
-    # normalize thousands & currency symbols
-    x = (s.astype(str)
-           .str.strip()
-           .str.replace(r"[^\d\.\,\-kK]", "", regex=True)
-           .str.replace(",", "", regex=False))
-    # '12.3k' -> 12300
-    k_mask = x.str.contains(r"[kK]$", na=False)
-    out = pd.to_numeric(x.str.replace(r"[kK]$", "", regex=True), errors="coerce")
-    out[k_mask] = out[k_mask] * 1000.0
-    return out.replace([np.inf, -np.inf], np.nan)
-
-# Canonical brand set + aliases
-CANON_BRANDS = [
-    "Acura","Alfa Romeo","Aston Martin","Audi","BMW","Bentley","Buick","Cadillac","Chevrolet","Chrysler",
-    "Dodge","RAM","FIAT","Ford","Genesis","GMC","Honda","Hyundai","INFINITI","Jaguar","Jeep","Kia",
-    "Land Rover","Lexus","Lincoln","Maserati","Mazda","Mercedes-Benz","MINI","Mitsubishi","Nissan",
-    "Porsche","Saab","Saturn","Scion","smart","Subaru","Suzuki","Tesla","Toyota","Volkswagen","Volvo",
-    "HUMMER","Pontiac","Oldsmobile","Rolls-Royce","Ferrari","McLaren","Lotus","Bugatti"
+# Choose input file in this priority if DATA_CSV env not set
+POSSIBLE_INPUTS = [
+    "data/new/used_car_listings.csv",
+    "data/used_car_listings.csv",
+    "data/used_car_sales.csv",
+    "data/new/cars.csv",
+    "data/cars.csv",
 ]
-ALIASES = {
-    "merc":"Mercedes-Benz","mercedes":"Mercedes-Benz","mercedesbenz":"Mercedes-Benz","benz":"Mercedes-Benz",
-    "vw":"Volkswagen","wolkswagen":"Volkswagen","volkswagon":"Volkswagen",
-    "chevy":"Chevrolet","chev":"Chevrolet","cheverolet":"Chevrolet","cheverlet":"Chevrolet",
-    "landrover":"Land Rover","range rover":"Land Rover","rangerover":"Land Rover",
-    "infinity":"INFINITI","porche":"Porsche","hyndai":"Hyundai","hyundia":"Hyundai",
-    "lexsus":"Lexus","mitsubushi":"Mitsubishi","cadilac":"Cadillac","bwm":"BMW","b m w":"BMW",
-    "ram":"RAM"
+
+DATA_CSV = os.getenv("DATA_CSV")
+OUT_CSV = os.getenv("OUT_CSV", "data/clean_used_cars.csv")
+PREPROC_PATH = os.getenv("PREPROC_PATH", "model/preprocessor.pkl")
+REPORT_PATH = os.getenv("REPORT_PATH", "model/cleaning_report.json")
+
+
+# --------------------------- helpers: file reading --------------------------
+
+def _detect_encoding_and_sep(p: Path) -> Tuple[str, str]:
+    """Guess text encoding and field separator from first bytes/line."""
+    with open(p, "rb") as f:
+        head = f.read(4)
+
+    # BOM checks for UTF-16/UTF-8-SIG
+    if head.startswith(b"\xff\xfe") or head.startswith(b"\xfe\xff"):
+        enc = "utf-16"
+    elif head.startswith(b"\xef\xbb\xbf"):
+        enc = "utf-8-sig"
+    else:
+        enc = "utf-8"
+
+    # crude sep guess from first non-empty text line
+    # fallback counts on common separators
+    try:
+        with open(p, "r", encoding=enc, errors="replace") as f:
+            for line in f:
+                if line.strip():
+                    sample = line
+                    break
+            else:
+                sample = ""
+    except Exception:
+        sample = ""
+
+    candidates = [",", ";", "\t", "|"]
+    counts = {c: sample.count(c) for c in candidates}
+    sep = max(counts, key=counts.get) if sample else ","
+    return enc, sep
+
+
+def read_table_smart(path: Path) -> pd.DataFrame:
+    """Read CSV/TSV robustly across encodings and separators."""
+    if not path.exists():
+        raise FileNotFoundError(f"Data file not found: {path}")
+
+    enc, sep = _detect_encoding_and_sep(path)
+
+    # Try fast engine first
+    try:
+        return pd.read_csv(path, encoding=enc, sep=sep, engine="c", low_memory=False)
+    except Exception as err_c:
+        # Fallback to python engine (no low_memory flag here)
+        try:
+            return pd.read_csv(path, encoding=enc, sep=sep, engine="python")
+        except Exception as err_py:
+            # Last resort: different encodings
+            for e in ("cp1252", "latin1", "utf-8-sig"):
+                try:
+                    return pd.read_csv(path, encoding=e, sep=sep, engine="python")
+                except Exception:
+                    continue
+            raise RuntimeError(
+                f"Could not parse {path}. Last errors:\nC-engine: {err_c}\nPython-engine: {err_py}"
+            )
+
+
+# --------------------------- helpers: columns -------------------------------
+
+# flexible mapping from many raw names -> canonical names
+CANON_MAP: Dict[str, str] = {
+    # price
+    "price": "price", "pricesold": "price", "askingprice": "price", "sale_price": "price",
+    # year
+    "year": "year", "yearsold": "year", "modelyear": "year",
+    # mileage / odometer
+    "mileage": "mileage", "odometer": "mileage", "miles": "mileage",
+    # make / brand
+    "make": "make", "brand": "make", "manufacturer": "make",
+    # model
+    "model": "model", "car_model": "model",
+    # body / body type
+    "body": "body", "bodytype": "body", "body_type": "body", "bodystyle": "body",
 }
-CANON_LOWER = [b.lower() for b in CANON_BRANDS]
 
-def canonicalize_make_text(make: str, *extra_texts: str) -> str | float:
-    """Best-effort brand canonicalization without external module."""
-    if make is None or (isinstance(make, float) and math.isnan(make)):
-        make = ""
-    txt = " ".join([str(make), *map(str, extra_texts)]).lower()
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    c2 = {}
+    for c in df.columns:
+        key = str(c).strip().lower().replace(" ", "").replace("-", "").replace("_", "")
+        # also retain version with underscore for safety
+        key2 = str(c).strip().lower().replace("-", "_").replace(" ", "_")
+        canon = (
+            CANON_MAP.get(key) or
+            CANON_MAP.get(key2) or
+            CANON_MAP.get(key2.replace(" ", ""))
+        )
+        c2[c] = canon if canon else c
+    df = df.rename(columns=c2)
+    return df
 
-    # direct alias hit
-    for k, v in ALIASES.items():
-        if k in txt:
-            return v
 
-    # brand token contained in text
-    for brand in CANON_BRANDS:
-        if brand.lower() in txt:
-            return brand
+# --------------------------- helpers: make cleanup --------------------------
 
-    # dumb upper-case fallback for simple strings like "bmw.."
-    m = re.sub(r"\.+", "", str(make)).strip().upper()
-    if len(m) <= 12 and any(b in m for b in ["BMW","AUDI","FORD","JEEP","GMC","VW"]):
-        # map some obvious cases
-        if m == "VW": return "Volkswagen"
-        if m == "BMW": return "BMW"
-    return pd.NA
+import re
+import unicodedata
 
-def maybe_canon_make(s_make: pd.Series, s_model: pd.Series | None = None) -> pd.Series:
-    if CANON_MAKE_FUNC:
-        return s_make.apply(lambda x: CANON_MAKE_FUNC(x) if pd.notna(x) else pd.NA)
-    # internal detector
-    extra = s_model if s_model is not None else pd.Series([""] * len(s_make))
-    return [canonicalize_make_text(a, b) for a, b in zip(s_make, extra)]
+# synonym/misspelling normalization -> canonical (lowercase key)
+MAKE_SYNONYMS: Dict[str, str] = {
+    "merc": "mercedes-benz", "mercedes": "mercedes-benz", "mercedesbenz": "mercedes-benz", "mercedes-b": "mercedes-benz",
+    "vw": "volkswagen", "volkswagon": "volkswagen", "wolkswagen": "volkswagen",
+    "chevy": "chevrolet", "chev": "chevrolet", "cheverolet": "chevrolet",
+    "landrover": "land rover", "range rover": "land rover", "rangerover": "land rover",
+    "infinity": "infiniti",
+    "hyndai": "hyundai", "hyundia": "hyundai",
+    "lexsus": "lexus",
+    "mitsubushi": "mitsubishi",
+    "cadilac": "cadillac",
+    "dodge ram": "ram",
+    "bwm": "bmw", "b m w": "bmw",
+}
 
-# -------------------- Schema detection ------------------
-def detect_and_rename(df: pd.DataFrame):
-    """Return (df_renamed, mapping, mileage_unit, price_source)."""
-    cols = df.columns.tolist()
-    mapping = {}
+# pretty casing
+MAKE_CASE: Dict[str, str] = {
+    "acura":"Acura","alfa romeo":"Alfa Romeo","aston martin":"Aston Martin","audi":"Audi","bentley":"Bentley",
+    "bmw":"BMW","buick":"Buick","cadillac":"Cadillac","chevrolet":"Chevrolet","chrysler":"Chrysler","dodge":"Dodge",
+    "ram":"RAM","fiat":"FIAT","ford":"Ford","genesis":"Genesis","gmc":"GMC","honda":"Honda","hyundai":"Hyundai",
+    "infiniti":"INFINITI","jaguar":"Jaguar","jeep":"Jeep","kia":"Kia","land rover":"Land Rover","lexus":"Lexus",
+    "lincoln":"Lincoln","maserati":"Maserati","mazda":"Mazda","mercedes-benz":"Mercedes-Benz","mini":"MINI",
+    "mitsubishi":"Mitsubishi","nissan":"Nissan","porsche":"Porsche","saab":"Saab","saturn":"Saturn","scion":"Scion",
+    "smart":"smart","subaru":"Subaru","tesla":"Tesla","toyota":"Toyota","volkswagen":"Volkswagen","volvo":"Volvo",
+    "hummer":"HUMMER","pontiac":"Pontiac","oldsmobile":"Oldsmobile","rolls-royce":"Rolls-Royce","ferrari":"Ferrari",
+    "mclaren":"McLaren","lotus":"Lotus","bugatti":"Bugatti","polestar":"Polestar","rivian":"Rivian","karma":"Karma",
+}
 
-    price = find_col(["price","list_price","selling_price","sellingprice","price_usd","current_price","final_price","pricesold"], cols)
-    year = find_col(["year","model_year","registration_year","year_built","year_of_manufacture"], cols)
-    miles = find_col(["mileage","odometer","odometer_value","miles","miles_driven","km","kilometers"], cols)
-    make = find_col(["make","brand","manufacturer","make_name"], cols)
-    model = find_col(["model","model_name","car_model","trim","variant"], cols)
-    state = find_col(["state","state_code","region","province"], cols)
-    fuel = find_col(["fuel","fuel_type","fueltype"], cols)
-    trans = find_col(["transmission","gearbox","transmission_type"], cols)
-    cond  = find_col(["condition","vehicle_condition","car_condition"], cols)
-    body  = find_col(["body","body_type","bodystyle","body_style"], cols)
-    title = find_col(["title_status","title","title_status_desc"], cols)
-    seller= find_col(["seller_type","seller","seller_category","dealer_type"], cols)
-    date  = find_col(["listed_at","posting_date","date","created_at","listing_date"], cols)
+def _norm_text(s: str) -> str:
+    if s is None or (isinstance(s, float) and math.isnan(s)):
+        return ""
+    s = str(s)
+    s = unicodedata.normalize("NFKD", s)
+    s = s.lower()
+    s = re.sub(r"[^a-z0-9\s]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
-    mapping.update({
-        price:"price", year:"year", miles:"mileage", make:"make", model:"model",
-        state:"state", fuel:"fuel", trans:"transmission", cond:"condition",
-        body:"body", title:"title_status", seller:"seller_type", date:"listing_date"
-    })
-    mapping = {k:v for k,v in mapping.items() if k is not None}
+def canonicalize_make(raw: Optional[str]) -> Optional[str]:
+    """Return a brand-like value (title-cased) or None."""
+    if pd.isna(raw):
+        return None
+    n = _norm_text(raw)
+    if not n:
+        return None
 
-    df2 = df.rename(columns=mapping)
+    n = MAKE_SYNONYMS.get(n, n)
+    # special join for mercedes benz -> mercedes-benz
+    if n.replace(" ", "") == "mercedesbenz":
+        n = "mercedes-benz"
 
-    # mileage unit
-    unit = "miles"
-    if miles and _norm(miles) in ("km","kilometers"):
-        unit = "kilometers"
+    # pretty case if known
+    if n in MAKE_CASE:
+        return MAKE_CASE[n]
 
-    return df2, mapping, unit, price
+    # If the string looks like a whole brand inside a longer clause
+    for k, pretty in MAKE_CASE.items():
+        if re.search(rf"\b{k}\b", n):
+            return pretty
 
-# -------------------- Preprocessor ----------------------
-def build_preprocessor(df: pd.DataFrame) -> ColumnTransformer:
-    numeric = [c for c in ["year","mileage","age","mileage_per_year"] if c in df.columns]
-    lowcard = [c for c in ["state","fuel","transmission","condition","title_status","seller_type","body"] if c in df.columns]
-    lowcard = [c for c in lowcard if df[c].nunique(dropna=True) <= 50]
-    highcard = [c for c in ["make","model"] if c in df.columns]
+    # fallback: title-case of first token
+    return n.title() if n else None
+
+
+# --------------------------- main cleaning routine --------------------------
+
+def main():
+    # Resolve input path
+    if DATA_CSV:
+        in_path = Path(DATA_CSV)
+    else:
+        for cand in POSSIBLE_INPUTS:
+            p = PROJECT_ROOT / cand
+            if p.exists():
+                in_path = p
+                break
+        else:
+            raise FileNotFoundError(
+                "No input data found. Set DATA_CSV env or place a CSV at one of:\n"
+                + "\n".join(POSSIBLE_INPUTS)
+            )
+
+    out_csv = PROJECT_ROOT / OUT_CSV
+    preproc_path = PROJECT_ROOT / PREPROC_PATH
+    report_path = PROJECT_ROOT / REPORT_PATH
+
+    # Read
+    df0 = read_table_smart(in_path)
+    n_raw = len(df0)
+
+    # Normalize column names
+    df = normalize_columns(df0)
+
+    # Keep only relevant columns if present
+    keep = [c for c in ["price", "year", "mileage", "make", "model", "body"] if c in df.columns]
+    if not keep:
+        raise ValueError(
+            f"No expected columns found after normalization in {in_path}.\n"
+            f"Columns present: {list(df.columns)[:25]}"
+        )
+    df = df[keep].copy()
+
+    # Types
+    for c in ("price", "year", "mileage"):
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # Canonicalize make
+    if "make" in df.columns:
+        df["make"] = df["make"].apply(canonicalize_make)
+
+    # Basic filters (robust ranges)
+    ref_year = pd.Timestamp.today().year
+    if "price" in df.columns:
+        df = df[(df["price"] >= 500) & (df["price"] <= 250_000) | df["price"].isna()]
+    if "mileage" in df.columns:
+        df = df[(df["mileage"] >= 0) & (df["mileage"] <= 500_000) | df["mileage"].isna()]
+    if "year" in df.columns:
+        df = df[(df["year"] >= 1982) & (df["year"] <= ref_year + 1) | df["year"].isna()]
+
+    # Drop rows with missing target
+    df = df.dropna(subset=["price"])
+
+    # Deduplicate approximate rows
+    subset_cols = [c for c in ["price", "year", "mileage", "make", "model"] if c in df.columns]
+    if subset_cols:
+        df = df.drop_duplicates(subset=subset_cols)
+
+    # Feature engineering
+    if "year" in df.columns:
+        df["age"] = ref_year - df["year"]
+    else:
+        df["age"] = np.nan
+
+    if "mileage" in df.columns:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            df["mileage_per_year"] = df["mileage"] / df["age"].replace(0, np.nan)
+    else:
+        df["mileage_per_year"] = np.nan
+
+    df["high_mileage"] = (df["mileage_per_year"] > 20_000).astype("int8").fillna(0)
+
+    # Final column order
+    cols = ["price", "year", "mileage", "make", "model", "body", "age", "mileage_per_year", "high_mileage"]
+    cols = [c for c in cols if c in df.columns]
+    df = df[cols]
+
+    # ----- Build preprocessor (safe with pd.NA) -----
+    # Identify feature groups
+    numeric_features: List[str] = [c for c in ["year", "mileage", "age", "mileage_per_year"] if c in df.columns]
+    low_card_cats: List[str] = []
+    if "body" in df.columns:
+        # treat body as low-card if present
+        low_card_cats.append("body")
+
+    high_card_cats: List[str] = [c for c in ["make", "model"] if c in df.columns]
+
+    # Ensure categorical columns are plain 'object' (avoid pandas NAType in encoders)
+    for group in (low_card_cats, high_card_cats):
+        if group:
+            df[group] = df[group].astype("object")
+
+    # Pipelines
+    num_pipe = SimpleImputer(strategy="median")
+
+    low_cat_pipe = Pipeline(steps=[
+        ("impute", SimpleImputer(strategy="constant", fill_value="__missing__")),
+        ("ohe", OneHotEncoder(handle_unknown="ignore", sparse_output=False, dtype=np.float32)),
+    ])
+
+    hash_pipe = Pipeline(steps=[
+        ("impute", SimpleImputer(strategy="constant", fill_value="__missing__")),
+        ("hash", HashingEncoder(n_components=32, return_df=False)),
+    ])
 
     transformers = []
-    if numeric:
-        transformers.append(("num", SimpleImputer(strategy="median"), numeric))
+    if numeric_features:
+        transformers.append(("num", num_pipe, numeric_features))
+    if low_card_cats:
+        transformers.append(("low", low_cat_pipe, low_card_cats))
+    if high_card_cats:
+        transformers.append(("hash", hash_pipe, high_card_cats))
 
-    # version-safe OHE
-    ohe_kwargs = dict(handle_unknown="ignore")
-    try:
-        OneHotEncoder(sparse_output=False)  # sklearn >= 1.2
-        ohe_kwargs["sparse_output"] = False
-    except TypeError:
-        ohe_kwargs["sparse"] = False       # sklearn < 1.2
+    preproc = ColumnTransformer(
+        transformers=transformers,
+        remainder="drop",
+        sparse_threshold=0.3,
+        n_jobs=None,
+    )
 
-    if lowcard:
-        transformers.append(("onehot", OneHotEncoder(**ohe_kwargs), lowcard))
-
-    if highcard and HAVE_HASHING:
-        transformers.append(("hash", Pipeline([
-            ("fillna", SimpleImputer(strategy="constant", fill_value="__missing__")),
-            ("hash", HashingEncoder(n_components=48, return_df=False)),
-        ]), highcard))
-    elif highcard:
-        # Fallback if no category_encoders
-        transformers.append(("onehot_hi", OneHotEncoder(**ohe_kwargs), highcard))
-
-    return ColumnTransformer(transformers=transformers, remainder="drop", sparse_threshold=0.3)
-
-# -------------------- Main ------------------------------
-def main():
-    path = Path(RAW_PATH)
-    assert path.exists(), f"Input not found: {path}"
-
-    df0 = read_table_smart(path)
-    n0 = len(df0)
-
-    # Detect schema & rename
-    df, col_map, mileage_unit, price_source = detect_and_rename(df0)
-
-    # ---- Ensure minimum fields exist
-    needed = ["price","year","mileage","make","model"]
-    missing = [c for c in needed if c not in df.columns]
-    if missing:
-        raise KeyError(f"Missing required columns {missing}. Mapped columns: {col_map}. All columns: {list(df.columns)}")
-
-    # ---- Coerce types
-    df["price"] = parse_price_series(df["price"])
-    df["year"] = pd.to_numeric(df["year"], errors="coerce")
-    df["mileage"] = pd.to_numeric(df["mileage"], errors="coerce")
-
-    # km → miles (by name) OR heuristic (very large medians)
-    converted_km = False
-    if mileage_unit == "kilometers":
-        df["mileage"] = df["mileage"] * 0.621371
-        converted_km = True
-    else:
-        med = df["mileage"].median(skipna=True)
-        if pd.notna(med) and med > 350_000:   # likely kilometers
-            df["mileage"] = df["mileage"] * 0.621371
-            converted_km = True
-            mileage_unit = "kilometers*heuristic"
-
-    # ---- Canonicalize make
-    df["make"] = maybe_canon_make(df["make"], df.get("model"))
-
-    # ---- Normalize other categoricals
-    for c in ["model","state","fuel","transmission","condition","body","title_status","seller_type"]:
-        if c in df.columns:
-            df[c] = (df[c].astype(str).str.strip().str.lower()
-                        .replace({"nan": pd.NA, "none": pd.NA, "": pd.NA}))
-
-    # ---- Listing date → reference year
-    ref_year = datetime.now().year
-    if "listing_date" in df.columns:
-        d = pd.to_datetime(df["listing_date"], errors="coerce")
-        if d.notna().any():
-            ref_year = int(d.dt.year.dropna().median())
-
-    # ---- Clean filters
-    before = len(df)
-    df = df.drop_duplicates()
-    df = df.dropna(subset=["price","year","mileage","make","model"], how="any")
-
-    df = df[df["price"].between(500, 250_000)]
-    df = df[df["mileage"].between(0, 500_000)]
-    df = df[df["year"].between(1980, ref_year + 1)]
-    after_basic = len(df)
-
-    # ---- Feature engineering
-    df["age"] = (ref_year - df["year"]).clip(lower=0)
-    df["mileage_per_year"] = df["mileage"] / np.where(df["age"] < 1, 1, df["age"])
-    df["high_mileage"] = (df["mileage"] > 150_000).astype("int8")
-
-    # ---- Drop rare models to stabilize training
-    dropped_rare = 0
-    if MIN_MODEL_SUPPORT > 1 and "model" in df.columns:
-        vc = df["model"].value_counts(dropna=True)
-        keep_models = vc[vc >= MIN_MODEL_SUPPORT].index
-        dropped_rare = int((~df["model"].isin(keep_models)).sum())
-        df = df[df["model"].isin(keep_models)]
-
-    # ---- Column order / subset
-    keep_cols = [c for c in [
-        "price","year","mileage","make","model","state","fuel","transmission",
-        "condition","body","title_status","seller_type","age","mileage_per_year","high_mileage"
-    ] if c in df.columns]
-    df = df[keep_cols].reset_index(drop=True)
-
-    # ---- Save cleaned CSV
-    Path(CLEAN_PATH).parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(CLEAN_PATH, index=False)
-
-    # ---- Fit preprocessor on features only
+    # Fit preprocessor (X only)
     X = df.drop(columns=["price"])
-    preproc = build_preprocessor(df)
     preproc.fit(X)
 
-    Path(PREPROC_PATH).parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(preproc, PREPROC_PATH)
+    # Save outputs
+    out_csv_path = out_csv
+    out_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_csv_path, index=False)
 
-    # ---- Report
+    preproc_file = preproc_path
+    preproc_file.parent.mkdir(parents=True, exist_ok=True)
+    import joblib
+    joblib.dump(preproc, preproc_file)
+
     report = {
-        "input_csv": str(path),
-        "raw_rows": int(n0),
-        "rows_after_basic_filters": int(after_basic),
-        "rows_final": int(len(df)),
-        "dropped_rows_percent": round(100 * (1 - len(df) / n0), 2) if n0 else None,
-        "reference_year_used": int(ref_year),
-        "mileage_unit_detected": mileage_unit,
-        "converted_km_to_miles": bool(converted_km),
-        "column_mapping": col_map,
-        "price_source_column": price_source,
-        "kept_columns": keep_cols,
-        "unique_makes_after": int(df["make"].nunique()) if "make" in df.columns else None,
-        "min_model_support": MIN_MODEL_SUPPORT,
-        "dropped_rare_models_rows": dropped_rare,
-        "numeric_features": [c for c in ["year","mileage","age","mileage_per_year"] if c in df.columns],
-        "low_card_cats": [c for c in ["state","fuel","transmission","condition","title_status","seller_type","body"] if c in df.columns],
-        "high_card_cats_hashing": [c for c in ["make","model"] if c in df.columns and HAVE_HASHING],
-        "hashing_used": bool(HAVE_HASHING),
+        "input_file": str(in_path),
+        "output_file": str(out_csv_path),
+        "preprocessor_file": str(preproc_file),
+        "raw_rows": int(n_raw),
+        "final_rows": int(len(df)),
+        "dropped_rows_percent": round(100.0 * (1 - len(df) / max(n_raw, 1)), 2),
+        "ref_year_used": int(ref_year),
+        "kept_columns": cols,
+        "numeric_features": numeric_features,
+        "low_card_cats": low_card_cats,
+        "high_card_cats": high_card_cats,
+        "unique_makes": int(df["make"].nunique()) if "make" in df.columns else None,
+        "unique_models": int(df["model"].nunique()) if "model" in df.columns else None,
+        "median_price": int(np.nanmedian(df["price"])) if "price" in df.columns else None,
+        "median_mileage": int(np.nanmedian(df["mileage"])) if "mileage" in df.columns else None,
     }
-    Path(REPORT_PATH).parent.mkdir(parents=True, exist_ok=True)
-    with open(REPORT_PATH, "w") as f:
+    report_path = report_path
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(report_path, "w") as f:
         json.dump(report, f, indent=2)
 
-    print("Column mapping ->", col_map)
-    print(f"✅ Cleaned data -> {CLEAN_PATH}")
-    print(f"✅ Preprocessor -> {PREPROC_PATH}")
+    print(f"✅ Cleaned data  -> {out_csv_path}")
+    print(f"✅ Preprocessor  -> {preproc_file}")
     print("Summary:", report)
+
 
 if __name__ == "__main__":
     main()

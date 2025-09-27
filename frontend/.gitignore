@@ -68,3 +68,20 @@ web_backup_*/
 # --- Data: keep only the cleaned CSV you serve ---
 data/**
 !data/clean_used_cars.csv
+
+# node / next leftovers
+node_modules/
+.next/
+frontend/.vercel/
+web_backup_*/
+
+# big local stuff
+*.sqlite
+*.feather
+*.parquet
+*.zip
+*.7z
+*.tar.gz
+data/*.json
+reports/
+catboost_info/
