@@ -31,3 +31,14 @@ web_backup_*/
 # training logs & notebook data
 catboost_info/
 notebooks/data/
+
+# Local data archives
+data/_archive/**
+
+# Intermediate previews
+data/clean_merged_preview.csv
+
+# Big raw dumps we don’t need in git
+data/**/*.zip
+data/**/used_car_listings.*
+data/new/cars.csv
