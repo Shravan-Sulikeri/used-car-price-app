@@ -1,0 +1,15 @@
+{
+  "base_rows": 2068,
+  "new_rows_raw": 50000,
+  "new_rows_after_clean": 49279,
+  "merged_rows": 51335,
+  "dedup_removed": 12,
+  "ref_year_used": 2025,
+  "top_makes_new": {
+    "Ford": 14676,
+    "Volkswagen": 14634,
+    "Toyota": 12412,
+    "BMW": 4951,
+    "Porsche": 2606
+  }
+}
