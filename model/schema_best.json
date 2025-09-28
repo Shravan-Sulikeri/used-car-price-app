@@ -1,0 +1,32 @@
+{
+  "feature_order": [
+    "year",
+    "mileage",
+    "make",
+    "model",
+    "body",
+    "age",
+    "mileage_per_year",
+    "high_mileage",
+    "miles_per_year",
+    "log_mileage",
+    "age_x_mpy"
+  ],
+  "categorical_cols": [
+    "make",
+    "model",
+    "body"
+  ],
+  "numeric_fill_median": {
+    "year": 2011.0,
+    "mileage": 105561.0,
+    "age": 14.0,
+    "mileage_per_year": 6875.0,
+    "high_mileage": 0.0,
+    "miles_per_year": 6875.0,
+    "log_mileage": 11.567053737008447,
+    "age_x_mpy": 105561.0
+  },
+  "ref_year": 2025,
+  "log_target": true
+}

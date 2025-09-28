@@ -1,359 +1,368 @@
 # web/dashboard_app.py
-from __future__ import annotations
-import os, json, math, hashlib
-from pathlib import Path
+# Streamlit dashboard for Used Car Price — ML & Analytics
 
+import os
+import json
+import math
 import joblib
 import numpy as np
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-import requests
 import streamlit as st
+import altair as alt
+from typing import Dict, List
 
-# ====================== Page & Theme ======================
-st.set_page_config(page_title="Used Car Price — Pro Dashboard", page_icon="🚗", layout="wide")
+# ======= CONFIG =======
+st.set_page_config(
+    page_title="Used Car Price — ML & Analytics",
+    page_icon="🚗",
+    layout="wide",
+)
 
-DATA_PATH   = os.getenv("DATA_PATH", "data/clean_used_cars.csv")
-MODEL_PATH  = os.getenv("MODEL_PATH", "model/model_gbm.pkl")
-PREPROC_PATH= os.getenv("PREPROC_PATH", "model/preprocessor.pkl")
-API_URL     = os.getenv("API_URL", "http://localhost:8000")
+DATA_CSV = "/workspaces/used-car-price-app/data/clean_used_cars_curated.csv"
+MODEL_PKL = "/workspaces/used-car-price-app/model/best_model.pkl"
+SCHEMA_JSON = "/workspaces/used-car-price-app/model/schema_best.json"
+METRICS_JSON = "/workspaces/used-car-price-app/model/metrics_best.json"
 
-NEON  = "#39FF14"
-BG    = "#0b0f0f"
-FG    = "#EAEAEA"
-MUTED = "#A6A6A6"
-
-st.markdown(f"""
-<style>
-:root {{
-  --bg: {BG};
-  --fg: {FG};
-  --muted: {MUTED};
-  --neon: {NEON};
-}}
-html, body, [data-testid="stAppViewContainer"] {{ background: var(--bg); color: var(--fg); }}
-.block-container {{ padding-top: 1.2rem; padding-bottom: 2rem; max-width: 1400px; }}
-
-.neon-title {{ color: var(--fg); font-size: 1.6rem; font-weight: 800; letter-spacing: .2px; margin: .25rem 0 .75rem 0; }}
-.neon-badge {{ display:inline-block; padding:.2rem .6rem; border:1px solid #1f2937; background:#101414; border-radius:10px; color:var(--muted); font-size:.85rem; }}
-
-.kpi {{ border-radius:14px; padding:12px 16px; background:#0f1313; border:1px solid #1f2937;
-       box-shadow: inset 0 0 0 1px rgba(57,255,20,0.06); min-height:92px; }}
-.kpi h4 {{ margin:0 0 .35rem 0; font-size:.95rem; color:var(--muted); font-weight:600; }}
-.kpi .v {{ font-size:1.6rem; font-weight:800; color:var(--fg); }}
-.kpi .accent {{ color:var(--neon); text-shadow:0 0 6px rgba(57,255,20,.35); }}
-
-.stTabs [data-baseweb="tab-list"] {{ gap:8px; }}
-.stTabs [data-baseweb="tab"] {{ background:#0f1414; border:1px solid #1f2937; border-radius:12px 12px 0 0; padding:.5rem .9rem; color:var(--muted); }}
-.stTabs [aria-selected="true"] {{ color:var(--neon) !important; border-bottom:2px solid var(--neon) !important; }}
-.stButton>button, .stDownloadButton>button {{ background: linear-gradient(90deg, #1b4, #19d75e); border:0; color:black; font-weight:800; border-radius:10px; }}
-svg text {{ fill: var(--fg) !important; }}
-</style>
-""", unsafe_allow_html=True)
-
-# ====================== Helpers ======================
+# ======= CACHE LAYERS =======
 @st.cache_data(show_spinner=False)
-def load_data(path: str):
-    p = Path(path)
-    if not p.exists():
-        st.error(f"Data not found at **{p}**")
-        st.stop()
-    df = pd.read_csv(p, low_memory=False)
+def load_data() -> pd.DataFrame:
+    df = pd.read_csv(DATA_CSV)
+    # basic dtype hygiene (helps filters)
+    if "year" in df: df["year"] = df["year"].astype(int)
+    if "mileage" in df: df["mileage"] = df["mileage"].astype(int)
+    for col in ["make","model","body"]:
+        if col in df:
+            df[col] = df[col].astype("string")
+    return df
 
-    # Coerce dtypes
-    for c in ("price","year","mileage"):
-        if c in df: df[c] = pd.to_numeric(df[c], errors="coerce")
-    for c in ("make","model","body"):
-        if c in df:
-            s = df[c].astype(str).str.strip()
-            s = s.replace({"nan":"Unknown","None":"Unknown","":"Unknown"})
-            df[c] = s.fillna("Unknown")
+@st.cache_resource(show_spinner=False)
+def load_artifacts():
+    model = joblib.load(MODEL_PKL) if os.path.exists(MODEL_PKL) else None
+    schema = None
+    if os.path.exists(SCHEMA_JSON):
+        with open(SCHEMA_JSON) as f:
+            schema = json.load(f)
+    metrics = None
+    if os.path.exists(METRICS_JSON):
+        with open(METRICS_JSON) as f:
+            metrics = json.load(f)
+    return model, schema, metrics
 
-    ref_year = int(df["year"].max()) if "year" in df else 2025
-    if "age" not in df and "year" in df:
+@st.cache_data(show_spinner=False)
+def cached_options(df: pd.DataFrame):
+    opts = {
+        "makes": sorted(df["make"].dropna().unique().tolist()) if "make" in df else [],
+        "bodies": sorted(df["body"].dropna().unique().tolist()) if "body" in df else [],
+        "years": sorted(df["year"].dropna().unique().astype(int).tolist()) if "year" in df else [],
+        "models_by_make": {},
+    }
+    if "make" in df and "model" in df:
+        g = df.groupby("make")["model"].apply(lambda s: sorted(s.dropna().unique().tolist()))
+        opts["models_by_make"] = g.to_dict()
+    return opts
+
+# ======= FEATURE ENGINEERING TO MATCH TRAINING =======
+def _engineer(df: pd.DataFrame, ref_year: int):
+    df = df.copy()
+    # engineered features used in training script
+    if "year" in df and "age" not in df:
         df["age"] = ref_year - df["year"]
-    if "mileage_per_year" not in df and {"mileage","age"} <= set(df.columns):
-        df["mileage_per_year"] = df["mileage"] / df["age"].clip(lower=0.5)
-    if "high_mileage" not in df and "mileage" in df:
-        df["high_mileage"] = (df["mileage"] > df["mileage"].median()).astype(int)
+    if {"mileage","age"}.issubset(df.columns) and "miles_per_year" not in df:
+        df["miles_per_year"] = df["mileage"] / df["age"].clip(lower=1)
+    if "mileage" in df and "log_mileage" not in df:
+        df["log_mileage"] = np.log1p(df["mileage"])
+    if {"age","miles_per_year"}.issubset(df.columns) and "age_x_mpy" not in df:
+        df["age_x_mpy"] = df["age"] * df["miles_per_year"]
+    return df
 
-    # Keep sensible rows
-    if {"price","mileage","year"} <= set(df.columns):
-        df = df[(df["price"].between(500, 250_000)) &
-                (df["mileage"].between(0, 600_000)) &
-                (df["year"].between(1980, ref_year+1))].copy()
-    return df, ref_year
+def prepare_features(df_in: pd.DataFrame, schema: Dict) -> pd.DataFrame:
+    """Ensure columns/dtypes/order match training schema."""
+    df = _engineer(df_in, schema.get("ref_year", 2025)).copy()
 
-def neon_fig(fig: go.Figure, title: str|None=None):
-    fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor=BG,
-        plot_bgcolor="#0f1414",
-        font=dict(color=FG, size=13),
-        legend=dict(bgcolor="#0f1414", bordercolor="#1f2937", borderwidth=1),
-        margin=dict(l=20, r=20, t=40, b=20),
-    )
-    if title:
-        fig.update_layout(title=dict(text=f"<b>{title}</b>", x=0, xanchor="left", font=dict(size=18, color=NEON)))
-    return fig
+    # ensure every training column exists
+    for c in schema["feature_order"]:
+        if c not in df.columns:
+            df[c] = np.nan
 
-def agg_top_with_other(s: pd.Series, n=10):
-    s = s.fillna("Unknown").replace({"nan":"Unknown","None":"Unknown","":"Unknown"})
-    vc = s.value_counts()
-    top = vc.head(n)
-    other = int(vc.iloc[n:].sum()) if len(vc) > n else 0
-    data = top.to_dict()
-    if other > 0:
-        data["Other"] = other
-    return data
+    # order columns
+    df = df[schema["feature_order"]]
 
-@st.cache_data(show_spinner=False)
-def apply_filters(df: pd.DataFrame, f_make, f_model, f_body, year_min, year_max, trim_99=True):
-    dff = df.copy()
-    if f_make:  dff = dff[dff["make"].isin(f_make)]
-    if f_model: dff = dff[dff["model"].isin(f_model)]
-    if f_body:  dff = dff[dff["body"].isin(f_body)]
-    dff = dff[dff["year"].between(year_min, year_max)]
-    if trim_99:
-        for c in ("price","mileage"):
-            if c in dff:
-                hi = dff[c].quantile(0.99)
-                dff = dff[dff[c] <= hi]
-    return dff
+    # set dtypes & fill medians for numerics
+    for c in schema.get("categorical_cols", []):
+        if c in df.columns:
+            df[c] = df[c].astype("category")
+    for c, med in schema.get("numeric_fill_median", {}).items():
+        if c in df.columns:
+            df[c] = df[c].fillna(med)
 
-# ====================== Data ======================
-df, REF_YEAR = load_data(DATA_PATH)
+    return df
 
-# ====================== Filters ======================
-st.markdown("<div class='neon-badge'>Filters</div>", unsafe_allow_html=True)
-f1, f2, f3, f4 = st.columns([2,2,2,3])
+def predict_prices(df_in: pd.DataFrame) -> np.ndarray:
+    model, schema, _ = load_artifacts()
+    if model is None or schema is None:
+        raise RuntimeError("Model or schema not found. Train and save artifacts first.")
+    X = prepare_features(df_in, schema)
+    pred_log = model.predict(X)
+    return np.expm1(pred_log)  # back to USD
 
-with f1:
-    f_make = st.multiselect("Make", sorted(df["make"].unique()), placeholder="All")
-with f2:
-    base_models = df.loc[df["make"].isin(f_make), "model"] if f_make else df["model"]
-    f_model = st.multiselect("Model", sorted(base_models.unique()), placeholder="All")
-with f3:
-    f_body = st.multiselect("Body", sorted(df["body"].unique()), placeholder="All")
-with f4:
-    y0, y1 = int(df["year"].min()), int(df["year"].max())
-    f_year = st.slider("Year range", min_value=y0, max_value=y1, value=(max(y0, 2010), y1))
+# ======= SMALL UTILS =======
+def format_currency(x: float) -> str:
+    try:
+        return f"${x:,.0f}"
+    except Exception:
+        return str(x)
 
-exp = st.expander("More filters", expanded=False)
-with exp:
-    c1, c2, c3 = st.columns([2,2,2])
-    with c1:
-        trim_99 = st.checkbox("Trim price & mileage at 99th pct", value=True)
-    with c2:
-        perf_mode = st.radio("Chart detail", ["Fast (aggregate)", "Detailed (sample)"], index=0)
-    with c3:
-        dl = st.checkbox("Enable download of filtered CSV", value=False)
+def k_formatter(x: float) -> str:
+    return f"{x/1000:.1f}k"
 
-dff = apply_filters(df, f_make, f_model, f_body, f_year[0], f_year[1], trim_99)
-st.caption(f"Showing **{len(dff):,}** rows after filters")
+def describe_block(df: pd.DataFrame) -> pd.DataFrame:
+    sel = ["price", "year", "mileage"]
+    out = {}
+    for c in sel:
+        if c in df:
+            s = df[c].dropna()
+            out[c] = {
+                "count": int(s.shape[0]),
+                "mean": float(s.mean()),
+                "median": float(s.median()),
+                "min": float(s.min()),
+                "p25": float(s.quantile(0.25)),
+                "p75": float(s.quantile(0.75)),
+                "max": float(s.max()),
+            }
+    return pd.DataFrame(out)
 
-# ====================== KPIs ======================
-k1, k2, k3, k4, k5 = st.columns(5)
+# ======= SIDEBAR =======
+df = load_data()
+model, schema, metrics = load_artifacts()
+opts = cached_options(df)
 
-def kpi(box, title: str, value: str, accent: bool=False):
-    content = f"<span class='accent'>{value}</span>" if accent else value
-    html = f"<div class='kpi'><h4>{title}</h4><div class='v'>{content}</div></div>"
-    with box:
-        st.markdown(html, unsafe_allow_html=True)
+with st.sidebar:
+    st.header("Filters")
+    make = st.selectbox("Make", ["All"] + opts["makes"])
+    models = opts["models_by_make"].get(make, []) if make != "All" else sorted(df["model"].dropna().unique()) if "model" in df else []
+    model_sel = st.selectbox("Model", ["All"] + models) if "model" in df else "All"
 
-kpi(k1, "Listings", f"{len(dff):,}")
-kpi(k2, "Avg Price", f"${dff['price'].mean():,.0f}" if "price" in dff else "—")
-kpi(k3, "Top Make",  dff["make"].mode().iat[0] if not dff.empty else "—", accent=True)
-kpi(k4, "Top Model", dff["model"].mode().iat[0] if not dff.empty else "—")
-kpi(k5, "Top Body",  dff["body"].mode().iat[0] if not dff.empty else "—")
+    year_min, year_max = (min(opts["years"]), max(opts["years"])) if opts["years"] else (2000, 2025)
+    year_range = st.slider("Year range", min_value=int(year_min), max_value=int(year_max),
+                           value=(int(year_min), int(year_max)), step=1)
 
-# ====================== Tabs ======================
-tab_market, tab_compare, tab_top, tab_predict = st.tabs(["Market share", "Comparisons", "Top lists", "Predict"])
+    mileage_max = int(df["mileage"].max()) if "mileage" in df else 300_000
+    mileage_sel = st.slider("Mileage (max)", min_value=0, max_value=mileage_max, value=min(120_000, mileage_max), step=1000)
 
-# ----- Market share -----
-with tab_market:
-    st.markdown("<h3 class='neon-title'>Market share</h3>", unsafe_allow_html=True)
+    body_sel = st.multiselect("Body type", options=opts["bodies"], default=opts["bodies"][:5] if len(opts["bodies"])>0 else [])
+
+    st.divider()
+    st.caption("Model artifacts")
+    st.write("Model:", "✅ found" if model is not None else "❌ missing")
+    st.write("Schema:", "✅ found" if schema is not None else "❌ missing")
+    if metrics:
+        st.write("MAE (USD):", format_currency(metrics.get("mae_usd", float("nan"))))
+
+# apply filters
+q = df.copy()
+if make != "All":
+    q = q[q["make"] == make]
+if "model" in q and model_sel != "All":
+    q = q[q["model"] == model_sel]
+if "year" in q:
+    q = q[(q["year"] >= year_range[0]) & (q["year"] <= year_range[1])]
+if "mileage" in q:
+    q = q[q["mileage"] <= mileage_sel]
+if body_sel and "body" in q:
+    q = q[q["body"].isin(body_sel)]
+
+# ======= HEADER =======
+st.title("Used Car Price — ML & Analytics")
+st.caption("Explore the market, filter by make/model/year, and generate predictions. 🚗📈")
+
+# ======= TABS =======
+tab_overview, tab_explore, tab_predict, tab_explain, tab_data, tab_about = st.tabs(
+    ["Overview", "Explore", "Predictions", "Explain", "Data", "About"]
+)
+
+# ======= OVERVIEW =======
+with tab_overview:
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Rows (filtered)", f"{q.shape[0]:,}")
+    c2.metric("Median Price", format_currency(q["price"].median() if "price" in q else float("nan")))
+    c3.metric("Median Year", f"{int(q['year'].median())}" if "year" in q and q.shape[0] else "—")
+    c4.metric("Median Mileage", k_formatter(q["mileage"].median()) if "mileage" in q and q.shape[0] else "—")
+
+    st.subheader("Distributions")
+    cA, cB, cC = st.columns(3)
+    if "price" in q:
+        chart_price = alt.Chart(q).mark_bar().encode(
+            alt.X("price:Q", bin=alt.Bin(maxbins=50), title="Price (USD)"),
+            alt.Y("count()", title="Count"),
+            tooltip=[alt.Tooltip("count()", title="Cars")]
+        ).properties(height=250)
+        cA.altair_chart(chart_price, use_container_width=True)
+    if "year" in q:
+        chart_year = alt.Chart(q).mark_bar().encode(
+            alt.X("year:Q", bin=alt.Bin(maxbins=40), title="Year"),
+            alt.Y("count()", title="Count"),
+        ).properties(height=250)
+        cB.altair_chart(chart_year, use_container_width=True)
+    if "mileage" in q:
+        chart_miles = alt.Chart(q).mark_bar().encode(
+            alt.X("mileage:Q", bin=alt.Bin(maxbins=50), title="Mileage"),
+            alt.Y("count()", title="Count"),
+        ).properties(height=250)
+        cC.altair_chart(chart_miles, use_container_width=True)
+
+    st.subheader("Top Makes / Models")
+    cM, cMo = st.columns(2)
+    if "make" in q:
+        top_make = (q["make"].value_counts().head(15).reset_index())
+        top_make.columns = ["make", "count"]
+        cM.altair_chart(
+            alt.Chart(top_make).mark_bar().encode(
+                x=alt.X("count:Q", title="Count"),
+                y=alt.Y("make:N", sort="-x", title="Make"),
+                tooltip=["make","count"]
+            ).properties(height=350),
+            use_container_width=True
+        )
+    if "model" in q:
+        top_model = (q["model"].value_counts().head(15).reset_index())
+        top_model.columns = ["model", "count"]
+        cMo.altair_chart(
+            alt.Chart(top_model).mark_bar().encode(
+                x=alt.X("count:Q", title="Count"),
+                y=alt.Y("model:N", sort="-x", title="Model"),
+                tooltip=["model","count"]
+            ).properties(height=350),
+            use_container_width=True
+        )
+
+# ======= EXPLORE =======
+with tab_explore:
+    st.subheader("Price vs Year / Mileage")
     c1, c2 = st.columns(2)
+    if {"price","year"}.issubset(q.columns):
+        c1.altair_chart(
+            alt.Chart(q.sample(min(5000, len(q)), random_state=42)).mark_circle(size=30, opacity=0.5).encode(
+                x=alt.X("year:Q", title="Year"),
+                y=alt.Y("price:Q", title="Price (USD)"),
+                color=alt.Color("make:N", legend=None),
+                tooltip=["make","model","year","mileage","price"]
+            ).interactive().properties(height=400),
+            use_container_width=True
+        )
+    if {"price","mileage"}.issubset(q.columns):
+        c2.altair_chart(
+            alt.Chart(q.sample(min(5000, len(q)), random_state=42)).mark_circle(size=30, opacity=0.5).encode(
+                x=alt.X("mileage:Q", title="Mileage"),
+                y=alt.Y("price:Q", title="Price (USD)"),
+                color=alt.Color("make:N", legend=None),
+                tooltip=["make","model","year","mileage","price"]
+            ).interactive().properties(height=400),
+            use_container_width=True
+        )
 
-    with c1:
-        make_counts = agg_top_with_other(dff["make"], 10)
-        fig = go.Figure(go.Pie(
-            labels=list(make_counts.keys()),
-            values=list(make_counts.values()),
-            hole=0.55, textinfo="percent",
-            hovertemplate="<b>%{label}</b><br>%{value:,} listings<extra></extra>",
-        ))
-        fig.update_traces(marker=dict(line=dict(color=BG, width=2)))
-        st.plotly_chart(neon_fig(fig, "Make share (Top 10 + Other)"), use_container_width=True)
-
-    with c2:
-        body_counts = agg_top_with_other(dff["body"], 10)
-        fig = go.Figure(go.Pie(
-            labels=list(body_counts.keys()),
-            values=list(body_counts.values()),
-            hole=0.55, textinfo="percent",
-            hovertemplate="<b>%{label}</b><br>%{value:,} listings<extra></extra>",
-        ))
-        fig.update_traces(marker=dict(line=dict(color=BG, width=2)))
-        st.plotly_chart(neon_fig(fig, "Body share (Top 10 + Other)"), use_container_width=True)
-
-# ----- Comparisons -----
-with tab_compare:
-    st.markdown("<h3 class='neon-title'>Comparisons</h3>", unsafe_allow_html=True)
-    cc1, cc2 = st.columns(2)
-
-    with cc1:
-        if dff.empty:
-            st.info("No data for current filters.")
-        else:
-            grp = dff.groupby("year")["price"].agg(
-                med="median", p25=lambda s: s.quantile(0.25), p75=lambda s: s.quantile(0.75)
-            ).reset_index()
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=grp["year"], y=grp["p25"], mode="lines", line=dict(width=0), showlegend=False))
-            fig.add_trace(go.Scatter(x=grp["year"], y=grp["p75"], mode="lines",
-                                     fill="tonexty", fillcolor="rgba(57,255,20,.12)",
-                                     line=dict(width=0), showlegend=False))
-            fig.add_trace(go.Scatter(x=grp["year"], y=grp["med"], mode="lines+markers",
-                                     line=dict(color=NEON, width=3),
-                                     marker=dict(size=6),
-                                     name="Median price",
-                                     hovertemplate="Year %{x}<br>Median: $%{y:,.0f}<extra></extra>"))
-            st.plotly_chart(neon_fig(fig, "Price vs Year (median + IQR)"), use_container_width=True)
-
-    with cc2:
-        if dff.empty:
-            st.info("No data for current filters.")
-        else:
-            if perf_mode.startswith("Fast"):
-                d2 = dff[["mileage","price"]].dropna().copy()
-                d2["bin"] = pd.cut(d2["mileage"], bins=60)
-                mids = d2["bin"].apply(lambda b: b.mid)
-                med = d2.groupby(mids)["price"].median().reset_index().rename(columns={"bin":"mileage","price":"price"})
-                med.columns = ["mileage","price"]
-                fig = px.line(med, x="mileage", y="price")
-                fig.update_traces(line=dict(color=NEON, width=3))
-                st.plotly_chart(neon_fig(fig, "Price vs Mileage (median by bins)"), use_container_width=True)
-            else:
-                sam = dff.sample(min(80_000, len(dff)), random_state=42)
-                fig = px.scatter(sam, x="mileage", y="price", opacity=0.35)
-                fig.update_traces(marker=dict(size=5))
-                st.plotly_chart(neon_fig(fig, "Price vs Mileage (sample)"), use_container_width=True)
-
-# ----- Top lists -----
-with tab_top:
-    st.markdown("<h3 class='neon-title'>Top lists</h3>", unsafe_allow_html=True)
-    tt1, tt2 = st.columns(2)
-
-    with tt1:
-        tm = dff["model"].value_counts().head(10).reset_index()
-        tm.columns = ["model","count"]
-        fig = px.bar(tm, x="model", y="count", text="count")
-        fig.update_traces(marker_color=NEON)
-        fig.update_layout(xaxis_tickangle=-35)
-        st.plotly_chart(neon_fig(fig, "Top 10 models (by units)"), use_container_width=True)
-
-    with tt2:
-        tb = dff["body"].value_counts().head(10).reset_index()
-        tb.columns = ["body","count"]
-        fig = px.bar(tb, x="body", y="count", text="count")
-        fig.update_traces(marker_color=NEON)
-        fig.update_layout(xaxis_tickangle=-10)
-        st.plotly_chart(neon_fig(fig, "Top 10 body types (by units)"), use_container_width=True)
-
-    st.markdown("<div class='neon-title' style='margin-top:1rem'>Median price by model (Top 15 by units)</div>", unsafe_allow_html=True)
-    top15_idx = dff["model"].value_counts().head(15).index
-    g = dff[dff["model"].isin(top15_idx)].groupby("model")["price"].median().sort_values(ascending=False)
-    fig = px.bar(g.reset_index(), x="model", y="price", text="price")
-    fig.update_traces(marker_color=NEON, texttemplate="$%{text:,.0f}", textposition="outside")
-    fig.update_layout(xaxis_tickangle=-35, yaxis_title="Median price (USD)")
-    st.plotly_chart(neon_fig(fig, "Median price — top models"), use_container_width=True)
-
-    if dl:
-        st.download_button("Download filtered CSV",
-            data=dff.to_csv(index=False).encode("utf-8"),
-            file_name="used_cars_filtered.csv",
-            mime="text/csv")
-
-# ----- Predictor -----
+# ======= PREDICTIONS =======
 with tab_predict:
-    st.markdown("<h3 class='neon-title'>Price Predictor</h3>", unsafe_allow_html=True)
-    pc1, pc2, pc3, pc4, pc5 = st.columns([1.4,1.4,1.2,1,1])
+    st.subheader("🔮 Predict Price")
 
-    with pc1:
-        p_make = st.selectbox("Make", sorted(df["make"].unique()))
-    with pc2:
-        models_for_make = sorted(df.loc[df["make"].eq(p_make), "model"].unique())
-        p_model = st.selectbox("Model", models_for_make)
-    with pc3:
-        p_body = st.selectbox("Body", sorted(df["body"].unique()))
-    with pc4:
-        p_year = st.number_input("Year",
-                                 min_value=int(df["year"].min()),
-                                 max_value=int(df["year"].max()),
-                                 value=int(np.clip(REF_YEAR-4, df["year"].min(), df["year"].max())),
-                                 step=1)
-    with pc5:
-        p_miles = st.number_input("Mileage",
-                                  min_value=0,
-                                  max_value=int(df["mileage"].max()),
-                                  value=int(df["mileage"].median()),
-                                  step=500)
+    if (model is None) or (schema is None):
+        st.warning("Model or schema not found. Train first (see model/).")
+    else:
+        left, right = st.columns([1,1])
 
-    def local_or_api_predict(year, mileage, make, model, body):
-        age = REF_YEAR - int(year)
-        mpgyr = mileage / (age if age > 0 else 0.5)
-        high_m = int(mileage > df["mileage"].median())
-        X = pd.DataFrame([{
-            "year": int(year),
-            "mileage": float(mileage),
-            "age": int(age),
-            "mileage_per_year": float(mpgyr),
-            "high_mileage": high_m,
-            "make": str(make),
-            "model": str(model),
-            "body": str(body),
-        }])
+        with left:
+            st.caption("Single car")
+            # dynamic options from dataset to avoid bad categories
+            makes = ["(choose)"] + opts["makes"]
+            make_in = st.selectbox("Make", makes, index=0)
+            models_for_make = opts["models_by_make"].get(make_in, []) if make_in != "(choose)" else []
+            model_in = st.selectbox("Model", ["(choose)"] + models_for_make, index=0)
+            bodies = ["(choose)"] + opts["bodies"]
+            body_in = st.selectbox("Body", bodies, index=0)
 
-        # Local model first (with/without preprocessor)
-        try:
-            mdl = joblib.load(MODEL_PATH)
-            try:
-                pre = joblib.load(PREPROC_PATH)
-                Xt = pre.transform(X)
-            except Exception:
-                Xt = X
-            y = mdl.predict(Xt)
-            price = float(y[0])
-            if math.isfinite(price):
-                return True, price, "local"
-        except Exception:
-            pass
+            years = opts["years"]
+            year_in = st.number_input("Year", min_value=min(years) if years else 1985,
+                                      max_value=max(years) if years else 2025,
+                                      value=2017, step=1)
+            mileage_in = st.number_input("Mileage", min_value=0, max_value=300_000, value=80_000, step=500)
 
-        # API fallback
-        try:
-            r = requests.post(f"{API_URL}/predict",
-                              headers={"content-type":"application/json"},
-                              data=json.dumps({
-                                  "year": int(year),
-                                  "mileage": int(mileage),
-                                  "make": make,
-                                  "model": model,
-                                  "body": body
-                              }), timeout=4.0)
-            if r.ok and r.json().get("ok"):
-                return True, float(r.json()["price_usd"]), "api"
-        except Exception:
-            pass
+            row = pd.DataFrame([{
+                "make": None if make_in == "(choose)" else make_in,
+                "model": None if model_in == "(choose)" else model_in,
+                "body": None if body_in == "(choose)" else body_in,
+                "year": int(year_in),
+                "mileage": int(mileage_in),
+            }])
 
-        return False, None, None
+            if st.button("Predict price (USD)"):
+                try:
+                    pred = predict_prices(row)
+                    st.success(format_currency(pred[0]))
+                except Exception as e:
+                    st.error(f"Prediction failed: {e}")
 
-    if st.button("Predict price", type="primary"):
-        ok, price, mode = local_or_api_predict(p_year, p_miles, p_make, p_model, p_body)
-        if ok:
-            st.success(f"Estimated price: **${price:,.0f}**  \n*({mode})*")
+        with right:
+            st.caption("Batch scoring")
+            up = st.file_uploader("Upload CSV (columns: make, model, body, year, mileage)", type=["csv"])
+            if up:
+                try:
+                    df_up = pd.read_csv(up)
+                    preds = predict_prices(df_up)
+                    out = df_up.copy()
+                    out["pred_price"] = preds
+                    st.dataframe(out.head(25), use_container_width=True)
+                    st.download_button(
+                        "⬇️ Download predictions.csv",
+                        out.to_csv(index=False).encode("utf-8"),
+                        file_name="predictions.csv",
+                        mime="text/csv",
+                    )
+                except Exception as e:
+                    st.error(f"Batch prediction failed: {e}")
+
+# ======= EXPLAIN =======
+with tab_explain:
+    st.subheader("🧠 Explain (quick)")
+    if model is None:
+        st.info("Train a model to view feature importance.")
+    else:
+        # Try to grab feature importances if available
+        if hasattr(model, "feature_importances_"):
+            # Feature names are the training columns
+            feat_names = schema["feature_order"] if schema and "feature_order" in schema else [f"f{i}" for i in range(len(model.feature_importances_))]
+            imp = pd.DataFrame({"feature": feat_names, "importance": model.feature_importances_.astype(float)})
+            imp = imp.sort_values("importance", ascending=False).head(20)
+
+            chart_imp = alt.Chart(imp).mark_bar().encode(
+                x=alt.X("importance:Q", title="Importance"),
+                y=alt.Y("feature:N", sort="-x", title="Feature"),
+                tooltip=["feature", alt.Tooltip("importance:Q", format=".3f")]
+            ).properties(height=500)
+            st.altair_chart(chart_imp, use_container_width=True)
         else:
-            st.error("Could not predict. Ensure model pickle or API is available.")
+            st.info("This model doesn't expose feature_importances_. Try CatBoost or a tree-based model.")
 
-st.caption("Neon theme • Fast aggregates for big slices • Detailed scatter via sampling • Local/HTTP prediction.")
+# ======= DATA =======
+with tab_data:
+    st.subheader("Data preview")
+    st.dataframe(q.head(100), use_container_width=True)
+    st.caption("Quick stats on filtered subset")
+    st.dataframe(describe_block(q).style.format({
+        "mean": "{:,.2f}", "median": "{:,.2f}", "min": "{:,.2f}",
+        "p25": "{:,.2f}", "p75": "{:,.2f}", "max": "{:,.2f}"
+    }), use_container_width=True)
+
+# ======= ABOUT =======
+with tab_about:
+    st.markdown("""
+**Used Car Price — ML & Analytics**  
+- Curated dataset: `data/clean_used_cars_curated.csv`  
+- Model artifacts: `model/best_model.pkl`, `model/schema_best.json`, `model/metrics_best.json`  
+- Training target in log-price; predictions are returned in USD.
+
+**Tips**
+- Filters above affect all charts.
+- Use the *Predictions* tab for single & batch scoring.
+- If you update the model, reload the app to refresh cached artifacts.
+    """)
+
