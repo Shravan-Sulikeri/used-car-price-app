@@ -1,37 +1,31 @@
 {
-  "input_file": "data/new/used_car_listings.csv",
-  "output_file": "/workspaces/used-car-price-app/data/clean_used_cars.csv",
-  "preprocessor_file": "/workspaces/used-car-price-app/model/preprocessor.pkl",
-  "raw_rows": 2068,
-  "final_rows": 2068,
-  "dropped_rows_percent": 0.0,
-  "ref_year_used": 2025,
-  "kept_columns": [
-    "price",
-    "year",
-    "mileage",
-    "make",
-    "model",
-    "body",
-    "age",
-    "mileage_per_year",
-    "high_mileage"
+  "input_file": "/workspaces/used-car-price-app/data/clean_used_cars.csv",
+  "output_file": "/workspaces/used-car-price-app/data/clean_used_cars_curated.csv",
+  "rows_removed": {
+    "Unknown dropped": 0,
+    "Hard bounds": 2696,
+    "price quantile trim": 5056,
+    "mileage quantile trim": 4952,
+    "Log-price z-score filter": 30103,
+    "Rare models": 23878
+  },
+  "final_shape": [
+    188807,
+    9
   ],
-  "numeric_features": [
-    "year",
-    "mileage",
-    "age",
-    "mileage_per_year"
-  ],
-  "low_card_cats": [
-    "body"
-  ],
-  "high_card_cats": [
-    "make",
-    "model"
-  ],
-  "unique_makes": 16,
-  "unique_models": 65,
-  "median_price": 5448,
-  "median_mileage": 99212
+  "params": {
+    "PRICE_MIN": 500,
+    "PRICE_MAX": 100000,
+    "MILEAGE_MIN": 0,
+    "MILEAGE_MAX": 300000,
+    "YEAR_MIN": 1985,
+    "YEAR_MAX": 2025,
+    "PRICE_Q_LOW": 0.01,
+    "PRICE_Q_HIGH": 0.99,
+    "MILEAGE_Q_LOW": 0.01,
+    "MILEAGE_Q_HIGH": 0.99,
+    "LOGP_Z_MAX": 3.5,
+    "MIN_MODEL_COUNT": 20,
+    "PROMOTE": false
+  }
 }
