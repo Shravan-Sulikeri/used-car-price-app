@@ -108,16 +108,14 @@ A portfolio-ready machine learning project for **used car price estimation and m
 
 ## Dashboard
 
-The **Streamlit dashboard** lets you:
+An interactive **Streamlit dashboard** lets you:
 - Explore distributions (price, year, mileage)  
-- Filter by make/model/year and see dynamic charts  
+- Filter by make/model/year and update charts dynamically  
 - Run quick predictions with the trained ML model  
-## Dashboard
 
 <p align="center">
   <img src="assets/dashboard.png" width="960" alt="Streamlit Dashboard Preview">
 </p>
-
 ## Roadmap
 
 | Feature / Task                          | Status       |
