@@ -1,15 +1,25 @@
 {
-  "base_rows": 2068,
-  "new_rows_raw": 50000,
-  "new_rows_after_clean": 49279,
-  "merged_rows": 51335,
-  "dedup_removed": 12,
+  "base_rows": 51335,
+  "new_rows_raw": 204157,
+  "new_rows_after_clean": 204157,
+  "merged_rows": 255492,
+  "dedup_removed": 0,
   "ref_year_used": 2025,
   "top_makes_new": {
-    "Ford": 14676,
-    "Volkswagen": 14634,
-    "Toyota": 12412,
-    "BMW": 4951,
-    "Porsche": 2606
+    "Ford": 34446,
+    "Chevrolet": 26355,
+    "Toyota": 18857,
+    "Honda": 13210,
+    "Nissan": 10802,
+    "Jeep": 9753,
+    "GMC": 7760,
+    "RAM": 7194,
+    "BMW": 6867,
+    "Dodge": 6656,
+    "Subaru": 5871,
+    "Mercedes-Benz": 5696,
+    "Hyundai": 5483,
+    "Volkswagen": 4612,
+    "Kia": 4302
   }
 }
