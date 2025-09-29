@@ -5,32 +5,15 @@ End-to-end training pipeline to build a stronger used-car price model with:
   • Feature engineering (region, drivetrain/transmission simplifications, engine liters, interactions)
   • Outlier filtering per (make, model_family, year)
   • K-Fold CV with early stopping and categorical features
-  • Optional Optuna tuning (if installed) to search LightGBM params
-  • Conformal prediction intervals (p10–p90) from CV residuals
-  • Artifacts: model.pkl, columns.json, cat_cols.json, metrics.json, intervals.json
-
-Usage
------
-python train_pipeline.py \
-  --input data/used_cars.csv \
-  --output_dir artifacts \
-  --target price \
-  --folds 5 \
-  --seed 42 \
-  --remove_outliers 1 \
-  --optuna 0
-
-Notes
------
-• Requires: pandas, numpy, scikit-learn, lightgbm. (optuna optional.)
-• Categorical columns are passed as pandas category dtypes to LightGBM.
-• Target is trained on log(price); metrics are reported on price scale too.
+  • Optional hyperparam hooks (params dictionary)
+  • Conformal-style prediction intervals from CV residuals
+Artifacts saved to --output_dir:
+  model.pkl, columns.json, cat_cols.json, metrics.json, intervals.json
 """
 
 from __future__ import annotations
 import argparse
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -39,16 +22,29 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import KFold
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, median_absolute_error
+from sklearn.metrics import (
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
+    median_absolute_error,
+)
 import lightgbm as lgb
 
-# -----------------------------
+# =============================================================================
+# I/O helper (CSV or Parquet)
+# =============================================================================
+def read_any(path: str) -> pd.DataFrame:
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Input file not found: {p}")
+    if p.suffix.lower() in {".parquet", ".pq"}:
+        return pd.read_parquet(p)
+    return pd.read_csv(p)
+
+
+# =============================================================================
 # Canonicalization utilities
-# -----------------------------
-import warnings
-warnings.filterwarnings("ignore", category=UserWarning)
-
-
+# =============================================================================
 def _norm_text(s: str) -> str:
     if pd.isna(s):
         return ""
@@ -62,7 +58,6 @@ BMW_RULES = [
     (r"\b(520[di]?|523i|525[i|d]?|528[i|d]?|530[i|e|d]?|535[i|d]?|540i|m5|xdrive ?5\d{2}[id]?)\b", "5 Series"),
     (r"\b(x1)\b", "X1"), (r"\b(x2)\b", "X2"), (r"\b(x3)\b", "X3"), (r"\b(x4)\b", "X4"), (r"\b(x5)\b", "X5"), (r"\b(x6)\b", "X6"),
 ]
-
 AUDI_RULES = [
     (r"\b(a[1-9])\b", lambda m: m.group(1).upper()),
     (r"\b(s[1-9])\b", lambda m: m.group(1).upper()),
@@ -71,22 +66,18 @@ AUDI_RULES = [
     (r"\b(3\.0t|2\.0t)\b.*\ba4\b", "A4"),
     (r"\b(3\.0t|2\.0t)\b.*\ba6\b", "A6"),
 ]
-
 MB_RULES = [
     (r"\b(c[-\s]?class|c\d{2,3})\b", "C-Class"),
     (r"\b(e[-\s]?class|e\d{2,3})\b", "E-Class"),
     (r"\b(s[-\s]?class|s\d{2,3})\b", "S-Class"),
     (r"\b(gl[abce]|gle|gls|gla|glc|g-wagen|g\s?class)\b", lambda m: {
-        "gla": "GLA", "glb": "GLB", "glc": "GLC", "gle": "GLE", "gls": "GLS",
-        "g-wagen": "G-Class", "g class": "G-Class"
+        "gla":"GLA","glb":"GLB","glc":"GLC","gle":"GLE","gls":"GLS","g-wagen":"G-Class","g class":"G-Class"
     }.get(m.group(1), m.group(1).upper())),
 ]
-
 TOYOTA_RULES = [
     (r"\b(camry)\b", "Camry"), (r"\b(corolla)\b", "Corolla"), (r"\b(rav4)\b", "RAV4"),
     (r"\b(4runner)\b", "4Runner"), (r"\b(tacoma)\b", "Tacoma"), (r"\b(highlander)\b", "Highlander"),
 ]
-
 MAKE_RULES: Dict[str, List[Tuple[str, object]]] = {
     "bmw": BMW_RULES,
     "audi": AUDI_RULES,
@@ -119,10 +110,9 @@ def apply_canonical_model(df: pd.DataFrame, make_col="make", model_col="model", 
     return df
 
 
-# -----------------------------
+# =============================================================================
 # Cleaning, outliers, features
-# -----------------------------
-
+# =============================================================================
 def clean_basic(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     # Normalize strings
@@ -136,7 +126,8 @@ def clean_basic(df: pd.DataFrame) -> pd.DataFrame:
             df[c] = df[c].where(~df[c].str.lower().isin(unknown_like), other=pd.NA)
     # Bounds
     if "year" in df.columns:
-        df = df[df["year"].astype(float).between(1990, 2026)]
+        df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+        df = df[df["year"].between(1990, 2026)]
         df["year"] = df["year"].astype(int)
     if "odometer" in df.columns:
         df["odometer"] = pd.to_numeric(df["odometer"], errors="coerce")
@@ -147,10 +138,16 @@ def clean_basic(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def remove_outliers_iqr(df: pd.DataFrame, group_cols=("make", "model_family", "year"), target="price", iqr_k=2.0):
+def remove_outliers_iqr(
+    df: pd.DataFrame,
+    group_cols=("make", "model_family", "year"),
+    target="price",
+    iqr_k=2.0,
+) -> pd.DataFrame:
     df = df.copy()
     if target not in df.columns:
         return df
+
     def _clip_grp(g):
         if len(g) < 8:
             return g
@@ -160,7 +157,13 @@ def remove_outliers_iqr(df: pd.DataFrame, group_cols=("make", "model_family", "y
         lo = q1 - iqr_k * iqr
         hi = q3 + iqr_k * iqr
         return g[(g[target] >= lo) & (g[target] <= hi)]
-    return df.groupby(list(group_cols), group_keys=False).apply(_clip_grp)
+
+    # include_groups=False to avoid pandas future warning (>=2.3)
+    try:
+        return df.groupby(list(group_cols), group_keys=False).apply(_clip_grp, include_groups=False)
+    except TypeError:
+        # Older pandas that doesn't support include_groups
+        return df.groupby(list(group_cols), group_keys=False).apply(_clip_grp)
 
 
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -179,11 +182,16 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
         midwest = set("IL IN IA KS MI MN MO NE ND OH SD WI".split())
         west = set("AK AZ CA CO HI ID MT NM NV OR UT WA WY".split())
         df["region"] = (
-            df["state"].str.upper().map(lambda s:
-                "Northeast" if s in northeast else
-                "South" if s in south else
-                "Midwest" if s in midwest else
-                "West" if s in west else "Other"
+            df["state"].str.upper().map(
+                lambda s: "Northeast"
+                if s in northeast
+                else "South"
+                if s in south
+                else "Midwest"
+                if s in midwest
+                else "West"
+                if s in west
+                else "Other"
             )
         )
     # Transmission/drivetrain
@@ -192,35 +200,37 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
             {"auto": "Automatic", "manual": "Manual"}
         ).fillna("Other")
     if "drive" in df.columns:
-        df["drive_simple"] = df["drive"].str.upper().replace({
-            "AWD": "AWD", "4WD": "4WD", "FWD": "FWD", "RWD": "RWD"
-        }).fillna("Other")
+        df["drive_simple"] = df["drive"].str.upper().replace(
+            {"AWD": "AWD", "4WD": "4WD", "FWD": "FWD", "RWD": "RWD"}
+        ).fillna("Other")
     # Engine liters from free text
     text_cols = [c for c in ["trim", "model", "title", "description"] if c in df.columns]
     if text_cols:
         combined = df[text_cols].astype(str).agg(" ".join, axis=1).str.lower()
-        disp = pd.to_numeric(combined.str.extract(r"(\d\.\d)\s*l")[0], errors="coerce")
-        df["engine_liters"] = disp
+        df["engine_liters"] = pd.to_numeric(combined.str.extract(r"(\d\.\d)\s*l")[0], errors="coerce")
     # Luxury brand flag
     luxury = {"bmw", "mercedes-benz", "mercedes", "audi", "lexus", "infiniti", "acura", "porsche", "tesla", "jaguar", "volvo"}
     if "make" in df.columns:
         df["is_luxury"] = df["make"].str.lower().isin(luxury).astype("int8")
     # Miles per year
     if {"car_age", "odometer"}.issubset(df.columns):
-        df["miles_per_year"] = (df["odometer"] / df["car_age"].replace(0, np.nan)).fillna(df["odometer"]).clip(upper=60_000)
-    # Categorical dtypes
+        df["miles_per_year"] = (
+            df["odometer"] / df["car_age"].replace(0, np.nan)
+        ).fillna(df["odometer"]).clip(upper=60_000)
+    # Categorical dtypes (initial pass)
     for c in ["make", "model_family", "region", "trans_simple", "drive_simple", "fuel", "title_status", "state", "city"]:
         if c in df.columns:
             df[c] = df[c].astype("category")
     return df
 
 
-# -----------------------------
-# Training and evaluation
-# -----------------------------
-
-def rmse(y_true, y_pred):
-    return mean_squared_error(y_true, y_pred, squared=False)
+# =============================================================================
+# Metrics, params, intervals
+# =============================================================================
+def rmse(y_true, y_pred) -> float:
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
 
 
 def price_metrics(y_true_price, y_pred_price) -> Dict[str, float]:
@@ -249,94 +259,52 @@ def default_lgbm_params() -> Dict:
     )
 
 
-def tune_with_optuna(X, y, cat_cols: List[str], seed: int, n_trials: int = 40):
-    try:
-        import optuna  # type: ignore
-    except Exception as e:
-        print("[optuna] not installed; using default params.")
-        return default_lgbm_params()
-
-    def objective(trial: "optuna.trial.Trial"):
-        params = {
-            "objective": "regression",
-            "metric": "rmse",
-            "verbosity": -1,
-            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
-            "num_leaves": trial.suggest_int("num_leaves", 31, 255),
-            "feature_fraction": trial.suggest_float("feature_fraction", 0.6, 1.0),
-            "bagging_fraction": trial.suggest_float("bagging_fraction", 0.6, 1.0),
-            "bagging_freq": trial.suggest_int("bagging_freq", 1, 7),
-            "min_data_in_leaf": trial.suggest_int("min_data_in_leaf", 20, 200),
-            "lambda_l1": trial.suggest_float("lambda_l1", 0.0, 10.0),
-            "lambda_l2": trial.suggest_float("lambda_l2", 0.0, 10.0),
-        }
-        kf = KFold(n_splits=5, shuffle=True, random_state=seed)
-        rmses = []
-        for tr_idx, va_idx in kf.split(X):
-            dtrain = lgb.Dataset(X.iloc[tr_idx], label=y.iloc[tr_idx], categorical_feature=cat_cols, free_raw_data=False)
-            dvalid = lgb.Dataset(X.iloc[va_idx], label=y.iloc[va_idx], categorical_feature=cat_cols, free_raw_data=False)
-            model = lgb.train(params, dtrain, num_boost_round=500,
-                              valid_sets=[dvalid], valid_names=["valid"],
-                              callbacks=[lgb.early_stopping(50, verbose=False)],)
-            pred = model.predict(X.iloc[va_idx], num_iteration=model.best_iteration)
-            rmses.append(rmse(y.iloc[va_idx], pred))
-        return float(np.mean(rmses))
-
-    study = optuna.create_study(direction="minimize")
-    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
-    best = study.best_trial.params
-    best.update({"objective": "regression", "metric": "rmse", "verbosity": -1})
-    return best
-
-
 def conformal_from_cv(residuals: List[np.ndarray], lower_q=0.10, upper_q=0.90) -> Dict[str, float]:
-    res = np.concatenate([np.abs(r) for r in residuals])
+    # Simple symmetric absolute residual quantile
+    res = np.concatenate([np.abs(r) for r in residuals if len(r) > 0])
+    q = float(np.quantile(res, upper_q)) if res.size else 0.0
     return {
-        "abs_resid_q_lo": float(np.quantile(res, upper_q)),  # upper quantile for lower bound subtraction
-        "abs_resid_q_hi": float(np.quantile(res, upper_q)),  # symmetric for simplicity
+        "abs_resid_q_lo": q,
+        "abs_resid_q_hi": q,
         "lower_q": lower_q,
         "upper_q": upper_q,
     }
 
 
-# -----------------------------
-# Main pipeline
-# -----------------------------
-
+# =============================================================================
+# Main training pipeline
+# =============================================================================
 def run(args):
-    input_path = Path(args.input)
-    out_dir = Path(args.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    df = read_any(args.input)
 
-    df = pd.read_csv(input_path)
-
-    # Core prep
+    # Prep
     df = clean_basic(df)
     df = apply_canonical_model(df, make_col="make", model_col="model", out_col="model_family")
     if args.remove_outliers:
         df = remove_outliers_iqr(df, group_cols=("make", "model_family", "year"), target=args.target, iqr_k=2.0)
     df = add_features(df)
 
-    # Define features/target
+    # Target/Features
     target_col = "log_price" if args.target == "price" else args.target
     if target_col not in df.columns:
         raise ValueError(f"Target column '{target_col}' not found after preprocessing.")
 
     drop_cols = {args.target, "log_price", "description", "title"}
-    feature_cols = [c for c in df.columns if c not in drop_cols]
-    cat_cols = [c for c in feature_cols if str(df[c].dtype) == "category"]
+    features = [c for c in df.columns if c not in drop_cols]
+    X = df[features].copy()
+    y = df[target_col].copy()
 
-    X = df[feature_cols]
-    y = df[target_col]
+    # Ensure all remaining object columns are categorical for LightGBM
+    obj_cols = X.select_dtypes(include="object").columns
+    for c in obj_cols:
+        X[c] = X[c].astype("category")
 
-    # Tune params (optional)
+    # Derive categorical feature list (by dtype)
+    cat_cols = [c for c in X.columns if str(X[c].dtype) == "category"]
+
     params = default_lgbm_params()
-    if args.optuna:
-        params = tune_with_optuna(X, y, cat_cols, seed=args.seed, n_trials=args.optuna_trials)
-        print("[optuna] best params:", params)
-
-    # KFold CV
     kf = KFold(n_splits=args.folds, shuffle=True, random_state=args.seed)
+
     oof_pred = np.zeros(len(X))
     models: List[lgb.Booster] = []
     fold_metrics: List[Dict[str, float]] = []
@@ -358,65 +326,60 @@ def run(args):
             callbacks=[lgb.early_stopping(args.early_stopping, verbose=False)],
         )
         models.append(model)
+
         pred_log = model.predict(Xva, num_iteration=model.best_iteration)
         oof_pred[va_idx] = pred_log
         residuals_log.append(yva.values - pred_log)
 
-        # Back-transform to price for metrics
+        # Report metrics on price scale for readability
         if args.target == "price":
             pred_price = np.expm1(pred_log)
             true_price = np.expm1(yva.values)
         else:
             pred_price = pred_log
             true_price = yva.values
-        fold_m = price_metrics(true_price, pred_price)
-        fold_metrics.append(fold_m)
-        print(f"Fold {fold}: {json.dumps(fold_m)}")
+        m = price_metrics(true_price, pred_price)
+        fold_metrics.append(m)
+        print(f"Fold {fold}: {json.dumps(m)}")
 
-    # Overall OOF metrics
+    # Overall OOF metrics (on price scale)
     if args.target == "price":
         oof_price = np.expm1(oof_pred)
-        true_price_all = np.expm1(y.values)
+        true_all = np.expm1(y.values)
     else:
         oof_price = oof_pred
-        true_price_all = y.values
-    overall = price_metrics(true_price_all, oof_price)
+        true_all = y.values
+    overall = price_metrics(true_all, oof_price)
     print("Overall:", overall)
 
-    # Train final model on full data
+    # Train final model on full data using avg(best_iteration)
+    best_iters = [m.best_iteration for m in models if hasattr(m, "best_iteration") and m.best_iteration]
+    num_boost_round = int(np.mean(best_iters)) if best_iters else args.n_estimators
     dall = lgb.Dataset(X, label=y, categorical_feature=cat_cols, free_raw_data=False)
-    final_model = lgb.train(
-        params,
-        dall,
-        num_boost_round=int(np.mean([m.best_iteration for m in models])),
-    )
+    final_model = lgb.train(params, dall, num_boost_round=num_boost_round)
 
-    # Conformal intervals (simple symmetric absolute residual quantile)
+    # Intervals
     intervals = conformal_from_cv(residuals_log, lower_q=0.10, upper_q=0.90)
 
     # Save artifacts
+    out = Path(args.output_dir)
+    out.mkdir(parents=True, exist_ok=True)
     import pickle
-    with open(out_dir / "model.pkl", "wb") as f:
+    with open(out / "model.pkl", "wb") as f:
         pickle.dump(final_model, f)
-    with open(out_dir / "columns.json", "w") as f:
-        json.dump(feature_cols, f, indent=2)
-    with open(out_dir / "cat_cols.json", "w") as f:
-        json.dump(cat_cols, f, indent=2)
-    with open(out_dir / "metrics.json", "w") as f:
-        json.dump({"folds": fold_metrics, "overall": overall}, f, indent=2)
-    with open(out_dir / "intervals.json", "w") as f:
-        json.dump(intervals, f, indent=2)
-
-    print(f"Saved artifacts to: {out_dir.resolve()}")
+    (out / "columns.json").write_text(json.dumps(features, indent=2))
+    (out / "cat_cols.json").write_text(json.dumps(cat_cols, indent=2))
+    (out / "metrics.json").write_text(json.dumps({"folds": fold_metrics, "overall": overall}, indent=2))
+    (out / "intervals.json").write_text(json.dumps(intervals, indent=2))
+    print(f"Saved artifacts to: {out.resolve()}")
 
 
-# -----------------------------
+# =============================================================================
 # CLI
-# -----------------------------
-
+# =============================================================================
 def parse_args():
     p = argparse.ArgumentParser(description="Train a stronger used-car price model.")
-    p.add_argument("--input", type=str, required=True, help="Path to input CSV with raw used-car data")
+    p.add_argument("--input", type=str, required=True, help="Path to input CSV/Parquet with used-car data")
     p.add_argument("--output_dir", type=str, default="artifacts", help="Directory to save model artifacts")
     p.add_argument("--target", type=str, default="price", help="Target column (default: price → uses log_price)")
     p.add_argument("--folds", type=int, default=5)
@@ -424,8 +387,6 @@ def parse_args():
     p.add_argument("--remove_outliers", type=int, default=1, help="1/0: apply IQR outlier removal per family")
     p.add_argument("--n_estimators", type=int, default=800)
     p.add_argument("--early_stopping", type=int, default=50)
-    p.add_argument("--optuna", type=int, default=0, help="1/0: run optuna hyper-param tuning")
-    p.add_argument("--optuna_trials", type=int, default=40)
     return p.parse_args()
 
 
@@ -434,5 +395,4 @@ if __name__ == "__main__":
     try:
         run(args)
     except KeyboardInterrupt:
-        print("Interrupted.")
         sys.exit(130)

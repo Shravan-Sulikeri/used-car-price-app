@@ -2,31 +2,30 @@
   "feature_order": [
     "year",
     "mileage",
-    "make",
-    "model",
-    "body",
     "age",
     "mileage_per_year",
     "high_mileage",
-    "miles_per_year",
-    "log_mileage",
-    "age_x_mpy"
-  ],
-  "categorical_cols": [
     "make",
     "model",
-    "body"
+    "body",
+    "pred_price"
   ],
-  "numeric_fill_median": {
-    "year": 2011.0,
-    "mileage": 105561.0,
-    "age": 14.0,
-    "mileage_per_year": 6875.0,
-    "high_mileage": 0.0,
-    "miles_per_year": 6875.0,
-    "log_mileage": 11.567053737008447,
-    "age_x_mpy": 105561.0
-  },
-  "ref_year": 2025,
-  "log_target": true
+  "feature_names": [
+    "year",
+    "mileage",
+    "age",
+    "mileage_per_year",
+    "high_mileage",
+    "make",
+    "model",
+    "body",
+    "pred_price"
+  ],
+  "categorical_features": [
+    "body",
+    "make",
+    "model"
+  ],
+  "target": "price",
+  "notes": "Auto-generated from legacy preview_gbm.csv and cat_levels.json"
 }
