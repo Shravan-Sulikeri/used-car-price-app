@@ -47,3 +47,32 @@ catboost_info/
 *.tfevents
 *.tsv
 notebooks/data/*.csv
+
+# Local-only data & artifacts
+/data/
+/notebooks/data/
+/artifacts/
+*.csv
+*.parquet
+catboost_info/
+*.tfevents
+*.tsv
+.venv/
+
+# Local-only data & artifacts
+/data/
+/notebooks/data/
+/artifacts/
+*.csv
+*.parquet
+catboost_info/
+*.tfevents
+*.tsv
+.venv/
+# data & models
+data/*.csv
+data/*.parquet
+model/*.pkl
+# streamlit cache
+**/.streamlit/
+**/.cache/
