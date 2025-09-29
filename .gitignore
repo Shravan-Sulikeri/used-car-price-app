@@ -69,3 +69,10 @@ catboost_info/
 *.tfevents
 *.tsv
 .venv/
+# data & models
+data/*.csv
+data/*.parquet
+model/*.pkl
+# streamlit cache
+**/.streamlit/
+**/.cache/
