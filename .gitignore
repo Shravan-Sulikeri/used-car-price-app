@@ -42,3 +42,8 @@ data/clean_merged_preview.csv
 data/**/*.zip
 data/**/used_car_listings.*
 data/new/cars.csv
+# Training/build artifacts
+catboost_info/
+*.tfevents
+*.tsv
+notebooks/data/*.csv
