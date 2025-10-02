@@ -1,622 +1,502 @@
 # web/dashboard_app.py
-# Used Car Price Dashboard — KBB-style + schema-safe prediction with robust LightGBM alignment
+from __future__ import annotations
 
-import os
-import io
 import json
-import math
-import pickle
-import textwrap
-from typing import Dict, List, Tuple, Optional
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import streamlit as st
-import altair as alt
+import plotly.express as px
 
-# =========================
-# ---- CONFIG & FLAGS -----
-# =========================
-PAGE_TITLE = "Used Car Price Dashboard"
-DEFAULT_DATA_GLOB = [
-    "data/clean_listings.parquet",
-    "data/clean_listings.csv",
-    "data/clean_used_cars_curated.csv",
-    "data/clean_used_cars.csv",
-    "data/listings.parquet",
-    "data/listings.csv",
+# ──────────────────────────────────────────────────────────────────────────────
+# App config
+# ──────────────────────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="Used Car Price Dashboard",
+    page_icon="🚗",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Theme: Breaking Bad palette
+# ──────────────────────────────────────────────────────────────────────────────
+PALETTE = [
+    "#E9D71B",  # bright yellow
+    "#C7C51B",  # olive yellow
+    "#A49828",  # mustard/olive
+    "#31553B",  # deep green
+    "#12140F",  # near-black
+    "#9FA12A",  # desaturated olive
+    "#4B6E56",  # mid green
+    "#D8C85E",  # light olive
 ]
+px.defaults.color_discrete_sequence = PALETTE
+px.defaults.template = None
 
-USE_LEGACY_GBM_DEFAULT = True
-LEGACY_MODEL_PATH = "model/model_gbm.pkl"
-LEGACY_CAT_LEVELS_PATH = "model/cat_levels.json"
-NEW_PIPELINE_PATH = "model/new_pipeline.joblib"  # optional
+def style_fig(fig, height=420):
+    fig.update_layout(
+        height=height,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=20, r=20, t=10, b=10),
+        font=dict(color="#F2F2F2"),
+    )
+    return fig
 
-COMPS_YEAR_WINDOW = 1
-COMPS_MILES_WINDOW = 10000
-SEED = 42
-
-np.random.seed(SEED)
-alt.data_transformers.disable_max_rows()
-
-# =========================
-# ---- UTIL FUNCTIONS -----
-# =========================
-def _first_existing_path(paths: List[str]) -> Optional[str]:
-    for p in paths:
-        if os.path.exists(p):
-            return p
-    return None
-
-def _read_any(path: str) -> pd.DataFrame:
-    ext = os.path.splitext(path)[1].lower()
-    if ext in [".parquet", ".pq"]:
-        return pd.read_parquet(path)
-    elif ext in [".csv", ".txt"]:
-        return pd.read_csv(path)
-    elif ext in [".feather", ".ft"]:
-        return pd.read_feather(path)
-    else:
-        raise ValueError(f"Unsupported file extension: {ext}")
-
-@st.cache_data(show_spinner=False)
-def load_dataset(user_file: Optional[bytes] = None, user_filename: Optional[str] = None) -> Tuple[pd.DataFrame, str]:
-    if user_file is not None and user_filename is not None:
-        ext = os.path.splitext(user_filename)[1].lower()
-        bio = io.BytesIO(user_file)
-        if ext in [".csv", ".txt"]:
-            df = pd.read_csv(bio)
-        elif ext in [".parquet", ".pq"]:
-            df = pd.read_parquet(bio)
-        elif ext in [".feather", ".ft"]:
-            df = pd.read_feather(bio)
-        else:
-            raise ValueError("Unsupported upload format. Use CSV, Parquet, or Feather.")
-        return df, f"Uploaded: {user_filename}"
-
-    path = _first_existing_path(DEFAULT_DATA_GLOB)
-    if path is None:
-        return pd.DataFrame(), "No default data found. Upload a file to proceed."
-    return _read_any(path), f"Loaded: {path}"
-
-@st.cache_resource(show_spinner=False)
-def load_legacy_gbm(model_path: str = LEGACY_MODEL_PATH, cat_levels_path: str = LEGACY_CAT_LEVELS_PATH):
-    if not os.path.exists(model_path) or not os.path.exists(cat_levels_path):
-        return None, None
-    try:
-        with open(model_path, "rb") as f:
-            model = pickle.load(f)
-        with open(cat_levels_path, "r") as f:
-            cat_levels = json.load(f)
-        cat_levels = {str(k): [str(v) for v in vals] for k, vals in cat_levels.items()}
-        # ensure "Other" exists for every cat col
-        for k, vals in list(cat_levels.items()):
-            if "Other" not in vals:
-                cat_levels[k] = vals + ["Other"]
-        return model, cat_levels
-    except Exception as e:
-        st.warning(f"Could not load legacy model: {e}")
-        return None, None
-
-@st.cache_resource(show_spinner=False)
-def load_new_pipeline(path: str = NEW_PIPELINE_PATH):
-    if not os.path.exists(path):
-        return None
-    try:
-        import joblib
-        return joblib.load(path)
-    except Exception as e:
-        st.warning(f"Could not load new pipeline: {e}")
-        return None
-
-CATEGORICAL_NAME_HINTS = {
-    "make","manufacturer","brand","model","variant","trim",
-    "fuel","transmission","state","body_type","engine","drivetrain","condition"
+# ──────────────────────────────────────────────────────────────────────────────
+# Brand knowledge / cleaners
+# ──────────────────────────────────────────────────────────────────────────────
+KNOWN_MAKES = {
+    "acura","alfa romeo","audi","bmw","buick","cadillac","chevrolet","chevy",
+    "chrysler","dodge","fiat","ford","gmc","honda","hyundai","infiniti","jaguar",
+    "jeep","kia","land rover","lexus","lincoln","mazda","mercedes-benz","mercedes",
+    "mini","mitsubishi","nissan","porsche","ram","scion","subaru","tesla",
+    "toyota","volkswagen","vw","volvo"
+}
+MAKE_ALIASES = {
+    "chevy": "Chevrolet",
+    "mercedes": "Mercedes-Benz",
+    "vw": "Volkswagen",
+}
+TESLA_MAP = {
+    "3": "Model 3", "model3": "Model 3", "model 3": "Model 3", "m3": "Model 3",
+    "y": "Model Y", "modely": "Model Y", "model y": "Model Y",
+    "x": "Model X", "modelx": "Model X", "model x": "Model X",
+    "s": "Model S", "models": "Model S", "model s": "Model S",
 }
 
-def infer_feature_schema(df: pd.DataFrame, feature_cols: List[str]) -> Dict[str, str]:
-    schema = {}
-    for c in feature_cols:
-        if c not in df.columns:
-            schema[c] = "numeric"; continue
-        if c.lower() in CATEGORICAL_NAME_HINTS:
-            schema[c] = "categorical"; continue
-        if pd.api.types.is_numeric_dtype(df[c]):
-            schema[c] = "numeric"
-        elif pd.api.types.is_categorical_dtype(df[c]) or pd.api.types.is_bool_dtype(df[c]):
-            schema[c] = "categorical"
-        else:
-            nunq = df[c].astype(str).nunique(dropna=False)
-            schema[c] = "categorical" if nunq <= 200 else "string"
-    return schema
+def _norm(s: Optional[str]) -> str:
+    if not s:
+        return ""
+    s = s.strip().lower()
+    return "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in s)
 
-def _align_categories(s: pd.Series, allowed_levels: List[str], other_label: str = "Other") -> pd.Series:
-    s = s.astype(str).fillna(other_label)
-    s_aligned = s.where(s.isin(allowed_levels), other_label)
-    return pd.Categorical(s_aligned, categories=list(dict.fromkeys(allowed_levels)), ordered=False)
+def clean_make_model(make: Optional[str], model: Optional[str]) -> Tuple[str, str]:
+    """
+    Robustly derive canonical (make, model).
+    - Splits cases like 'Bmw 3 Series' in the make field.
+    - If make is missing but model starts with brand, split.
+    - Applies common aliases and Tesla canonicalization.
+    """
+    mk_raw, md_raw = (make or "").strip(), (model or "").strip()
+    nmk, nmd = _norm(mk_raw), _norm(md_raw)
+    mk, md = mk_raw.title(), " ".join(md_raw.split()).title()
 
-def schema_guard_and_prepare(
-    X: pd.DataFrame,
-    expected_cols: List[str],
-    schema: Dict[str, str],
-    legacy_cat_levels: Optional[Dict[str, List[str]]] = None,
-    fillna_num: float = 0.0,
-    other_label: str = "Other",
-) -> pd.DataFrame:
-    X = X.copy()
-    for c in expected_cols:
-        if c not in X.columns:
-            X[c] = np.nan
-    X = X[expected_cols]
-    for c in expected_cols:
-        role = schema.get(c, "numeric")
-        if role == "numeric":
-            X[c] = pd.to_numeric(X[c], errors="coerce").fillna(fillna_num).astype(float)
-        elif role == "categorical":
-            if legacy_cat_levels and c in legacy_cat_levels:
-                allowed = [str(v) for v in legacy_cat_levels[c]]
-                X[c] = _align_categories(X[c], allowed, other_label=other_label)
-            else:
-                X[c] = X[c].astype(str).fillna(other_label)
-        else:
-            X[c] = X[c].astype(str).fillna("")
-    return X
+    # If make contains both brand and model (e.g., 'Bmw 3 Series')
+    toks = nmk.split()
+    if toks:
+        first = toks[0]
+        if first in KNOWN_MAKES and len(toks) > 1:
+            mk = first.title()
+            md = " ".join(toks[1:]).title()
 
-def value_counts_top_n(df: pd.DataFrame, col: str, n: int = 20) -> pd.DataFrame:
-    vc = df[col].astype(str).value_counts(dropna=False).reset_index()
-    vc.columns = [col, "count"]
-    vc["pct"] = vc["count"] / max(1, vc["count"].sum())
-    return vc.head(n)
+    # If make missing but model starts with a brand
+    if (not mk or _norm(mk) not in KNOWN_MAKES) and nmd:
+        first = nmd.split()[0]
+        if first in KNOWN_MAKES:
+            mk = first.title()
+            md = " ".join(nmd.split()[1:]).title() or md
 
-# ---- LightGBM helpers ----
-def lgbm_feature_names(model) -> Optional[List[str]]:
+    # Aliases
+    alias_key = _norm(mk)
+    if alias_key in MAKE_ALIASES:
+        mk = MAKE_ALIASES[alias_key]
+
+    # Tesla canonicalization
+    if _norm(mk) == "tesla":
+        t = nmd.replace(" ", "")
+        for k, v in TESLA_MAP.items():
+            if k.replace(" ", "") == t or k in nmd:
+                return ("Tesla", v)
+        if "model3" in nmd or nmd in ("3", "m3"):  return ("Tesla", "Model 3")
+        if "modely" in nmd or nmd == "y":          return ("Tesla", "Model Y")
+        if "modelx" in nmd or nmd == "x":          return ("Tesla", "Model X")
+        if "models" in nmd or nmd == "s":          return ("Tesla", "Model S")
+
+    return (mk.title(), md.title())
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Data loading (uploader in sidebar; no widgets inside cached funcs)
+# ──────────────────────────────────────────────────────────────────────────────
+def load_data(uploaded_file) -> pd.DataFrame:
+    """
+    Load CSV/Parquet from upload or defaults under /data, then clean.
+    Prefers cleaned files to avoid 'Other' in charts.
+    """
+    if uploaded_file is not None:
+        df = pd.read_parquet(uploaded_file) if uploaded_file.name.endswith(".parquet") else pd.read_csv(uploaded_file)
+        return _post_load_clean(df)
+
+    for p in [
+        Path("data/clean_listings_clean.parquet"),
+        Path("data/clean_listings_clean.csv"),
+        Path("data/clean_listings.parquet"),
+        Path("data/clean_listings.csv"),
+    ]:
+        if p.exists():
+            df = pd.read_parquet(p) if p.suffix == ".parquet" else pd.read_csv(p)
+            return _post_load_clean(df)
+
+    return pd.DataFrame()
+
+def _post_load_clean(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    # Normalize names
+    rename = {
+        "Manufacturer": "make",
+        "Make": "make",
+        "Model": "model",
+        "Year": "year",
+        "Mileage": "mileage",
+        "pricesold": "price",
+        "Price": "price",
+        "Price_in_thousands": "price_thousands",
+        "BodyType": "body_type",
+        "DriveType": "drive_type",
+    }
+    df.rename(columns={k: v for k, v in rename.items() if k in df.columns}, inplace=True)
+
+    if "price" not in df.columns and "price_thousands" in df.columns:
+        df["price"] = pd.to_numeric(df["price_thousands"], errors="coerce") * 1000.0
+
+    for c in ("price", "year", "mileage"):
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    for c in ("make", "model"):
+        if c in df.columns:
+            df[c] = df[c].astype(str).str.strip()
+
+    # Clean / split make-model
+    if "make" in df.columns and "model" in df.columns:
+        df[["make", "model"]] = df.apply(lambda r: clean_make_model(r["make"], r["model"]), axis=1, result_type="expand")
+    elif "make" in df.columns:
+        df["make"], df["model"] = zip(*df["make"].map(lambda s: clean_make_model(s, None)))
+    elif "model" in df.columns:
+        df["make"], df["model"] = zip(*df["model"].map(lambda s: clean_make_model(None, s)))
+
+    # sensible ranges
+    if "year" in df:    df = df[(df["year"].between(1990, 2026)) | df["year"].isna()]
+    if "mileage" in df: df = df[(df["mileage"].between(0, 300_000)) | df["mileage"].isna()]
+    if "price" in df:   df = df[(df["price"].between(1000, 250_000)) | df["price"].isna()]
+
+    # Final tidy
+    if "make" in df:  df["make"]  = df["make"].str.title()
+    if "model" in df: df["model"] = df["model"].str.replace(r"[^A-Za-z0-9\-\s]", "", regex=True)\
+                                               .str.replace(r"\s+", " ", regex=True)\
+                                               .str.strip().str.title()
+
+    return df.reset_index(drop=True)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Make → Model cascades
+# ──────────────────────────────────────────────────────────────────────────────
+def build_cascades(df: pd.DataFrame):
+    makes = sorted(df["make"].dropna().unique().tolist()) if "make" in df else []
+    models_by_make = {mk: sorted(df.loc[df["make"] == mk, "model"].dropna().unique().tolist()) for mk in makes}
+    return makes, models_by_make
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Legacy model loading & STRICT, model-driven prediction
+# ──────────────────────────────────────────────────────────────────────────────
+def load_legacy_model():
     try:
-        if hasattr(model, "booster_") and model.booster_ is not None:
-            return list(model.booster_.feature_name())
-        if hasattr(model, "feature_name"):
-            return list(model.feature_name() if callable(model.feature_name) else model.feature_name)
-        if hasattr(model, "feature_name_"):
+        import joblib
+        mp, sp, cp = Path("model/model_gbm.pkl"), Path("model/schema_best.json"), Path("model/cat_levels.json")
+        if not (mp.exists() and sp.exists()):
+            return None, None, None
+        model = joblib.load(mp)
+        schema = json.loads(sp.read_text())
+        cats = json.loads(cp.read_text()) if cp.exists() else {}
+        return model, schema, cats
+    except Exception as e:
+        st.warning(f"Model load failed: {e}")
+        return None, None, None
+
+def _coerce_to_category(val, levels: List[str]) -> str:
+    """Return a value that exists in levels, preferring 'Other' if available."""
+    if pd.isna(val) or val is None:
+        return "Other" if "Other" in levels else (levels[0] if levels else "")
+    sval = str(val)
+    if sval in levels:
+        return sval
+    return "Other" if "Other" in levels else (levels[0] if levels else "")
+
+def _get_model_feature_names(model) -> List[str]:
+    """Pull exact feature names the trained LightGBM model expects."""
+    try:
+        if hasattr(model, "feature_name_") and model.feature_name_:
             return list(model.feature_name_)
     except Exception:
         pass
-    return None
+    try:
+        booster = getattr(model, "booster_", None) or getattr(model, "booster", None)
+        if booster is not None:
+            names = booster.feature_name()
+            if names:
+                return list(names)
+    except Exception:
+        pass
+    return []
 
-def align_df_to_feature_names(df: pd.DataFrame, feature_names: List[str]) -> pd.DataFrame:
-    df = df.copy()
-    for col in feature_names:
-        if col not in df.columns:
-            df[col] = 0
-    df = df[feature_names]
-    for c in df.columns:
-        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
-    return df
+def build_design_matrix(schema: dict, cats: dict, row: dict, model_feature_names: List[str]) -> pd.DataFrame:
+    """
+    Build a 1-row DataFrame that EXACTLY matches the training matrix:
+    - column set and order come from the MODEL (authoritative)
+    - numeric defaults from schema (fallback 0)
+    - categoricals cast to fixed levels from cats
+    """
+    if not model_feature_names:
+        model_feature_names = schema.get("feature_order", schema.get("columns", [])) or []
 
-def looks_one_hot(feature_names: List[str]) -> bool:
-    # crude: if any feature contains '__', assume one-hot (make__Honda)
-    return any("__" in f for f in feature_names)
+    X = pd.DataFrame([{c: np.nan for c in model_feature_names}], columns=model_feature_names)
 
-def encode_cats_to_codes(df_in: pd.DataFrame, cat_levels: Dict[str, List[str]]) -> pd.DataFrame:
-    """Replace categorical columns with stable integer codes based on cat_levels order (unseen -> index of 'Other')."""
-    df = df_in.copy()
-    for c in df.columns:
-        if c in cat_levels:
-            levels = cat_levels[c]
-            idx_map = {lvl: i for i, lvl in enumerate(levels)}
-            df[c] = df[c].astype(str).map(lambda v: idx_map.get(v, idx_map.get("Other", len(levels)-1))).astype(float)
+    # Fill provided row values (only those the model uses)
+    for k, v in (row or {}).items():
+        if k in X.columns:
+            X.at[0, k] = v
+
+    # Numeric defaults (schema) or 0
+    num_defaults: dict = schema.get("numeric_defaults", {}) if schema else {}
+    for c in X.columns:
+        if c in (cats or {}):  # categorical handled later
+            continue
+        if c in num_defaults:
+            X[c] = pd.to_numeric(X[c], errors="coerce").fillna(num_defaults[c])
         else:
-            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
-    return df
+            X[c] = pd.to_numeric(X[c], errors="ignore")
+            if X[c].dtype.kind in "fcbiu":
+                X[c] = X[c].fillna(0)
 
-# =========================
-# ---- PAGE LAYOUT --------
-# =========================
-st.set_page_config(page_title=PAGE_TITLE, layout="wide")
-st.title(PAGE_TITLE)
+    # Categorical casting
+    for c, levels in (cats or {}).items():
+        if c in X.columns:
+            coerced = _coerce_to_category(X.at[0, c], levels)
+            X[c] = pd.Categorical([coerced], categories=levels)
 
+    # Ensure order
+    X = X[model_feature_names]
+    return X
+
+def predict_with_legacy_gbm(model, schema: dict, cats: dict, row: dict) -> float:
+    feat_names = _get_model_feature_names(model)
+    X = build_design_matrix(schema or {}, cats or {}, row, feat_names)
+    return float(model.predict(X)[0])
+
+def comps_estimate(df: pd.DataFrame, row: dict) -> Tuple[float, Dict[str, float]]:
+    base = df.copy()
+    if "make" in base and row.get("make"):
+        base = base[base["make"] == row["make"]]
+    if "model" in base and row.get("model"):
+        base = base[base["model"] == row["model"]]
+    if "year" in base and pd.notna(row.get("year")):
+        base = base[base["year"].between(row["year"] - 2, row["year"] + 2)]
+    if "mileage" in base and pd.notna(row.get("mileage")):
+        lo, hi = row["mileage"] * 0.75, row["mileage"] * 1.25
+        base = base[(base["mileage"] >= lo) & (base["mileage"] <= hi)]
+
+    prices = base["price"].dropna()
+    if len(prices) >= 3:
+        return float(prices.median()), {
+            "p25": float(prices.quantile(0.25)),
+            "p75": float(prices.quantile(0.75)),
+            "n_comp": int(len(prices)),
+        }
+    g = df["price"].dropna()
+    if len(g) > 0:
+        return float(g.median()), {"p25": float(g.quantile(0.25)), "p75": float(g.quantile(0.75)), "n_comp": 0}
+    return float("nan"), {"p25": float("nan"), "p75": float("nan"), "n_comp": 0}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Sidebar: navigation + upload
+# ──────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.header("Data")
-    uploaded = st.file_uploader("Upload CSV/Parquet/Feather", type=["csv", "parquet", "pq", "feather", "ft"])
-    st.caption("If you don’t upload, the app will try default files under `/data`.")
+    st.title("Used Car Dashboard")
+    page = st.radio("Navigate", ["Graphs", "Distribution (Pie)", "Price Prediction"], label_visibility="collapsed")
+    st.markdown("---")
+    uploaded = st.file_uploader("Upload CSV or Parquet", type=["csv", "parquet"])
+    st.caption("If no file is uploaded, the app looks for data under `data/`.")
 
-df, source_str = load_dataset(
-    user_file=(uploaded.read() if uploaded is not None else None),
-    user_filename=(uploaded.name if uploaded is not None else None),
-)
-st.caption(source_str)
-
+# Load data (no widgets inside)
+df = load_data(uploaded)
 if df.empty:
-    st.info("No data loaded. Upload a dataset or add one at `data/clean_listings.parquet` or `data/clean_listings.csv`.")
+    st.info("No data found. Upload a CSV/Parquet or place `clean_listings_clean.{csv,parquet}` under `/data`.")
     st.stop()
 
-# ---- Column mapping helpers ----
-def _find_col(cands: List[str]) -> Optional[str]:
-    lower_cols = {c.lower(): c for c in df.columns}
-    for c in cands:
-        if c in lower_cols:
-            return lower_cols[c]
-    return None
-
-col_price   = _find_col(["price", "list_price", "sellingprice", "msrp"])
-col_year    = _find_col(["year", "model_year"])
-col_mileage = _find_col(["mileage", "odometer"])
-col_make    = _find_col(["make", "manufacturer", "brand"])
-col_model   = _find_col(["model", "car_model", "variant"])
-
-with st.expander("Column Mapping (optional)"):
-    c1, c2, c3, c4, c5 = st.columns(5)
-    col_price   = c1.selectbox("Price column",   ["<none>"] + list(df.columns), index=(["<none>"] + list(df.columns)).index(col_price)   if col_price   else 0)
-    col_year    = c2.selectbox("Year column",    ["<none>"] + list(df.columns), index=(["<none>"] + list(df.columns)).index(col_year)    if col_year    else 0)
-    col_mileage = c3.selectbox("Mileage column", ["<none>"] + list(df.columns), index=(["<none>"] + list(df.columns)).index(col_mileage) if col_mileage else 0)
-    col_make    = c4.selectbox("Make column",    ["<none>"] + list(df.columns), index=(["<none>"] + list(df.columns)).index(col_make)    if col_make    else 0)
-    col_model   = c5.selectbox("Model column",   ["<none>"] + list(df.columns), index=(["<none>"] + list(df.columns)).index(col_model)   if col_model   else 0)
-
-col_price   = None if col_price   == "<none>" else col_price
-col_year    = None if col_year    == "<none>" else col_year
-col_mileage = None if col_mileage == "<none>" else col_mileage
-col_make    = None if col_make    == "<none>" else col_make
-col_model   = None if col_model   == "<none>" else col_model
-
-# Clean fields
-df_plot = df.copy()
-if col_year:
-    df_plot[col_year] = pd.to_numeric(df_plot[col_year], errors="coerce")
-if col_mileage:
-    df_plot[col_mileage] = pd.to_numeric(df_plot[col_mileage], errors="coerce")
-if col_price:
-    df_plot[col_price] = pd.to_numeric(df_plot[col_price], errors="coerce")
-
-# =========================
-# ---- KPI TILES ----------
-# =========================
-k1, k2, k3, k4, k5 = st.columns(5)
-if col_price:
-    avg_price  = float(pd.to_numeric(df_plot[col_price], errors="coerce").mean())
-    med_price  = float(pd.to_numeric(df_plot[col_price], errors="coerce").median())
-    total_cars = int(df_plot[col_price].notna().sum())
-    k1.metric("Average Price", f"${avg_price:,.0f}")
-    k2.metric("Median Price",  f"${med_price:,.0f}")
-    k3.metric("Total Cars",    f"{total_cars:,}")
-if col_mileage:
-    avg_miles = float(pd.to_numeric(df_plot[col_mileage], errors="coerce").mean())
-    k4.metric("Average Mileage", f"{avg_miles:,.0f} mi")
-if col_year:
-    yr_min, yr_max = (int(df_plot[col_year].min()), int(df_plot[col_year].max()))
-    k5.metric("Year Range", f"{yr_min} – {yr_max}")
-
-# ============ FILTERS ============
-with st.sidebar:
-    st.header("Filters")
-    subset = df_plot.copy()
-
-    if col_year and subset[col_year].notna().sum() > 0:
-        min_year, max_year = int(subset[col_year].dropna().min()), int(subset[col_year].dropna().max())
-        yr_range = st.slider("Year range", min_year, max_year, (min_year, max_year), step=1)
-        subset = subset[(subset[col_year] >= yr_range[0]) & (subset[col_year] <= yr_range[1])]
-
-    if col_price and subset[col_price].notna().sum() > 0:
-        pmin, pmax = float(subset[col_price].min()), float(subset[col_price].max())
-        pr = st.slider("Price range", float(math.floor(pmin)), float(math.ceil(pmax)), (float(math.floor(pmin)), float(math.ceil(pmax))))
-        subset = subset[(subset[col_price] >= pr[0]) & (subset[col_price] <= pr[1])]
-
-    if col_mileage and subset[col_mileage].notna().sum() > 0:
-        mmin, mmax = float(subset[col_mileage].min()), float(subset[col_mileage].max())
-        mr = st.slider("Mileage range", float(math.floor(mmin)), float(math.ceil(mmax)), (float(math.floor(mmin)), float(math.ceil(mmax))))
-        subset = subset[(subset[col_mileage] >= mr[0]) & (subset[col_mileage] <= mr[1])]
-
-    if col_make:
-        top_makes = value_counts_top_n(subset, col_make, n=30)[col_make].tolist()
-        make_sel = st.multiselect("Make", options=top_makes, default=[])
-        if make_sel:
-            subset = subset[subset[col_make].astype(str).isin(make_sel)]
-
-    if col_model:
-        top_models = value_counts_top_n(subset, col_model, n=30)[col_model].tolist()
-        model_sel = st.multiselect("Model", options=top_models, default=[])
-        if model_sel:
-            subset = subset[subset[col_model].astype(str).isin(model_sel)]
-
-st.subheader("Exploratory Charts")
-
-def _year_axis(title: str = "Year") -> alt.Axis:
-    return alt.Axis(title=title, labelAngle=0, labelOverlap=True)
-
-# Year vs Price with P10/P50/P90
-if col_year and col_price:
-    df_yp = subset[[col_year, col_price]].dropna().copy()
-    if not df_yp.empty:
-        df_yp["YearInt"] = df_yp[col_year].astype(int)
-        bands = (
-            df_yp.groupby("YearInt")[col_price]
-            .quantile([0.10, 0.50, 0.90]).unstack().reset_index()
-            .rename(columns={0.10: "p10", 0.50: "p50", 0.90: "p90"})
-        )
-        bands["YearLabel"] = bands["YearInt"].astype(str)
-        base = alt.Chart(bands).encode(x=alt.X("YearLabel:N", axis=_year_axis()))
-        area = base.mark_area(opacity=0.2).encode(y="p10:Q", y2="p90:Q")
-        line = base.mark_line().encode(y=alt.Y("p50:Q", title="Price (P50)"))
-        st.altair_chart((area + line).interactive().properties(height=320), use_container_width=True)
-
-# Mileage vs Price
-if col_mileage and col_price:
-    df_mp = subset[[col_mileage, col_price]].dropna().copy()
-    if not df_mp.empty:
-        chart2 = (
-            alt.Chart(df_mp).mark_circle(size=30, opacity=0.35)
-            .encode(
-                x=alt.X(f"{col_mileage}:Q", title="Mileage"),
-                y=alt.Y(f"{col_price}:Q", title="Price"),
-                tooltip=[alt.Tooltip(f"{col_mileage}:Q", title="Mileage", format=",.0f"),
-                         alt.Tooltip(f"{col_price}:Q", title="Price", format=",.0f")],
-            ).properties(height=320)
-        )
-        st.altair_chart(chart2.interactive(), use_container_width=True)
-
-# Make vs Price (box)
-if col_make and col_price:
-    top_m = value_counts_top_n(subset, col_make, n=15)[col_make].tolist()
-    df_m = subset[subset[col_make].astype(str).isin(top_m)][[col_make, col_price]].dropna()
-    if not df_m.empty:
-        st.altair_chart(
-            alt.Chart(df_m).mark_boxplot()
-            .encode(x=alt.X(f"{col_make}:N", sort="-y", title="Make"),
-                    y=alt.Y(f"{col_price}:Q", title="Price")).properties(height=360),
-            use_container_width=True
-        )
-
-# Model vs Price (box)
-if col_model and col_price:
-    top_mod = value_counts_top_n(subset, col_model, n=15)[col_model].tolist()
-    df_mod = subset[subset[col_model].astype(str).isin(top_mod)][[col_model, col_price]].dropna()
-    if not df_mod.empty:
-        st.altair_chart(
-            alt.Chart(df_mod).mark_boxplot()
-            .encode(x=alt.X(f"{col_model}:N", sort="-y", title="Model"),
-                    y=alt.Y(f"{col_price}:Q", title="Price")).properties(height=360),
-            use_container_width=True
-        )
-
-# Pie
-pie_dim = col_make or col_model
-if pie_dim:
-    st.markdown(f"#### Distribution by {pie_dim}")
-    vc = value_counts_top_n(subset, pie_dim, n=12)
-    if not vc.empty:
-        st.altair_chart(
-            alt.Chart(vc).mark_arc(outerRadius=120, innerRadius=40)
-            .encode(
-                theta=alt.Theta("count:Q"),
-                color=alt.Color(f"{pie_dim}:N", legend=alt.Legend(title=pie_dim)),
-                tooltip=[alt.Tooltip(f"{pie_dim}:N", title=pie_dim),
-                         alt.Tooltip("count:Q", title="Count", format=",.0f"),
-                         alt.Tooltip("pct:Q", title="Share", format=".1%")],
-            ).properties(height=380),
-            use_container_width=True
-        )
-
-st.divider()
-
-# =========================
-# ---- PREDICTION (KBB) ---
-# =========================
-st.subheader("Price Prediction (Schema-Safe, KBB-style Range)")
-
-legacy_model, legacy_cat_levels = load_legacy_gbm()
-new_pipeline = load_new_pipeline()
-
-available_models = []
-if legacy_model is not None: available_models.append("Legacy GBM")
-if new_pipeline is not None: available_models.append("New Pipeline")
-if not available_models: available_models = ["(No model found)"]
-
-default_index = 0
-if "Legacy GBM" in available_models and USE_LEGACY_GBM_DEFAULT:
-    default_index = available_models.index("Legacy GBM")
-elif "New Pipeline" in available_models:
-    default_index = available_models.index("New Pipeline")
-
-cA, cB = st.columns([1.2, 1])
-with cB:
-    model_choice = st.selectbox("Model", options=available_models, index=default_index)
-
-# Heuristic feature selection
-common_feature_candidates = ["year","mileage","make","model","fuel","transmission",
-                             "condition","state","trim","body_type","engine","drivetrain"]
-feature_cols = []
-for cand in common_feature_candidates:
-    hit = _find_col([cand])
-    if hit: feature_cols.append(hit)
-if len(feature_cols) < 3:
-    feature_cols = [c for c in df.columns if c != col_price][:8]
-
-schema = infer_feature_schema(df, feature_cols)
-
-# ----- Dependent dropdown for model by make -----
-# Build map: make -> models (top 50)
-make_to_models = {}
-if col_make and col_model:
-    tmp = df[[col_make, col_model]].dropna()
-    if not tmp.empty:
-        make_to_models = (tmp.astype(str)
-                          .groupby(col_make)[col_model]
-                          .apply(lambda s: s.value_counts().head(50).index.tolist())
-                          .to_dict())
-
-with st.expander("Feature Schema (detected)", expanded=False):
-    st.json(schema)
-
-st.markdown("#### Enter Features")
-form_cols = st.columns(3)
-user_row = {}
-selected_make_value = None
-
-for i, fcol in enumerate(feature_cols):
-    role = schema.get(fcol, "numeric")
-    slot = form_cols[i % 3]
-
-    # --- YEAR: force integer (no decimals) ---
-    if fcol == col_year and role == "numeric":
-        yr_min = int(df_plot[col_year].dropna().min()) if col_year else 1990
-        yr_max = int(df_plot[col_year].dropna().max()) if col_year else 2025
-        user_row[fcol] = slot.number_input(fcol, min_value=yr_min, max_value=yr_max,
-                                           value=int(np.nan_to_num(df_plot[col_year].median())) if col_year else 2018,
-                                           step=1, format="%d")
-        continue
-
-    # --- MILEAGE: nicer defaults ---
-    if fcol == col_mileage and role == "numeric":
-        default_val = float(pd.to_numeric(df[fcol], errors="coerce").median()) if fcol in df.columns else 0.0
-        user_row[fcol] = slot.number_input(fcol, value=float(np.nan_to_num(default_val)), step=500.0)
-        continue
-
-    if role == "numeric":
-        default_val = float(pd.to_numeric(df[fcol], errors="coerce").median()) if fcol in df.columns else 0.0
-        user_row[fcol] = slot.number_input(fcol, value=float(np.nan_to_num(default_val)))
-    elif role == "categorical":
-        # Special case: model options depend on make
-        if fcol == col_make:
-            opts = value_counts_top_n(df, fcol, n=50)[fcol].astype(str).tolist() or [""]
-            selected_make_value = slot.selectbox(fcol, options=opts, index=0)
-            user_row[fcol] = selected_make_value
-        elif fcol == col_model and selected_make_value and selected_make_value in make_to_models:
-            opts = make_to_models[selected_make_value] or [""]
-            user_row[fcol] = slot.selectbox(fcol, options=opts, index=0)
+# ──────────────────────────────────────────────────────────────────────────────
+# KPIs
+# ──────────────────────────────────────────────────────────────────────────────
+def kpis(d: pd.DataFrame):
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: st.metric("Total Cars", f"{len(d):,}")
+    with c2:
+        if "price" in d: st.metric("Avg Price", f"${d['price'].mean():,.0f}")
+    with c3:
+        if "mileage" in d and d["mileage"].notna().any():
+            st.metric("Median Mileage", f"{d['mileage'].median():,.0f}")
         else:
-            opts = value_counts_top_n(df, fcol, n=25)[fcol].astype(str).tolist() or [""]
-            user_row[fcol] = slot.selectbox(fcol, options=opts, index=0)
-    else:
-        user_row[fcol] = slot.text_input(fcol, value="")
+            st.metric("Median Mileage", "—")
+    with c4:
+        if "make" in d:
+            vc = d["make"].value_counts()
+            st.metric("Top Make", vc.index[0] if len(vc) else "—")
 
-asking_price = st.number_input("Optional: Asking/Listing Price (to rate the deal)", value=0.0, min_value=0.0, step=500.0)
-user_df = pd.DataFrame([user_row], columns=feature_cols)
+# ──────────────────────────────────────────────────────────────────────────────
+# Page: Graphs
+# ──────────────────────────────────────────────────────────────────────────────
+if page == "Graphs":
+    st.markdown("## 📈 KPIs & Interactive Graphs")
+    kpis(df); st.markdown("")
 
-# ---- comps & fair range ----
-def compute_comps_and_range(df_base: pd.DataFrame, row: Dict[str, any]) -> Tuple[pd.DataFrame, Optional[float], Optional[float], int]:
-    if not (col_price and col_year and col_mileage):
-        return pd.DataFrame(), None, None, 0
-    dfC = df_base[[col_price, col_year, col_mileage] + [c for c in [col_make, col_model] if c is not None]].dropna()
-    if dfC.empty:
-        return pd.DataFrame(), None, None, 0
-    mask = pd.Series(True, index=dfC.index)
-    if col_make and row.get(col_make):
-        mask &= (dfC[col_make].astype(str) == str(row.get(col_make)))
-    if col_model and row.get(col_model):
-        mask &= (dfC[col_model].astype(str) == str(row.get(col_model)))
-    year_val = pd.to_numeric(row.get(col_year), errors="coerce")
-    miles_val = pd.to_numeric(row.get(col_mileage), errors="coerce")
-    if pd.notna(year_val):
-        mask &= (dfC[col_year] >= year_val - COMPS_YEAR_WINDOW) & (dfC[col_year] <= year_val + COMPS_YEAR_WINDOW)
-    if pd.notna(miles_val):
-        mask &= (dfC[col_mileage] >= miles_val - COMPS_MILES_WINDOW) & (dfC[col_mileage] <= miles_val + COMPS_MILES_WINDOW)
-    comps = dfC[mask].copy()
-    if comps.empty:
-        return pd.DataFrame(), None, None, 0
-    p25 = float(comps[col_price].quantile(0.25))
-    p75 = float(comps[col_price].quantile(0.75))
-    return comps, p25, p75, len(comps)
+    with st.expander("Filters", expanded=False):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            makes_all = ["(All)"] + sorted(df["make"].dropna().unique().tolist())
+            f_make = st.selectbox("Make", makes_all, index=0)
+        with c2:
+            years = df["year"].dropna().astype(int).sort_values().unique().tolist() if "year" in df else []
+            yr_min, yr_max = (min(years), max(years)) if years else (1990, 2026)
+            f_year = st.slider("Year range", yr_min, yr_max, (yr_min, yr_max))
+        with c3:
+            f_miles = st.slider("Mileage (max)", 0, 300_000, 300_000)
 
-pred = None
-explain = ""
-if st.button("Predict Price", use_container_width=True):
-    try:
-        # Decide model
-        use_legacy = (model_choice == "Legacy GBM" and legacy_model is not None)
-        use_new = (model_choice == "New Pipeline" and new_pipeline is not None)
+    dff = df.copy()
+    if f_make != "(All)":
+        dff = dff[dff["make"] == f_make]
+    if "year" in dff:
+        dff = dff[dff["year"].between(f_year[0], f_year[1])]
+    if "mileage" in dff:
+        dff = dff[(dff["mileage"].isna()) | (dff["mileage"] <= f_miles)]
 
-        if not (use_legacy or use_new):
-            st.warning("No model available. Please add a model or switch selection.")
-        elif use_new:
-            pred_val = float(new_pipeline.predict(user_df.copy())[0])
-            pred = pred_val
-            explain = "Predicted using New Pipeline."
-        else:
-            # ===== Legacy LightGBM path =====
-            expected_cats = list(legacy_cat_levels.keys()) if legacy_cat_levels else []
-            expected_nums = [c for c, r in schema.items() if r == "numeric"]
-            expected_cols = expected_nums + expected_cats
+    colA, colB = st.columns(2)
+    if {"year", "price"}.issubset(dff.columns):
+        fig = px.scatter(dff, x="year", y="price", color="make",
+                         opacity=0.7, labels={"year": "Year", "price": "Price ($)"})
+        colA.plotly_chart(style_fig(fig), use_container_width=True)
+    if {"mileage", "price"}.issubset(dff.columns):
+        fig = px.scatter(dff, x="mileage", y="price", color="make",
+                         opacity=0.7, labels={"mileage": "Mileage", "price": "Price ($)"})
+        colB.plotly_chart(style_fig(fig), use_container_width=True)
 
-            X_prep = schema_guard_and_prepare(
-                user_df,
-                expected_cols=expected_cols,
-                schema=infer_feature_schema(user_df, expected_cols),
-                legacy_cat_levels=legacy_cat_levels,
-                fillna_num=0.0,
-                other_label="Other",
-            )
+    if {"make", "price"}.issubset(dff.columns):
+        st.markdown("#### Price by Make")
+        top = dff["make"].value_counts().head(12).index.tolist()
+        dd = dff[dff["make"].isin(top)]
+        fig = px.box(dd, x="make", y="price", color="make",
+                     points="outliers", labels={"make": "Make", "price": "Price ($)"})
+        fig.update_layout(showlegend=False)
+        st.plotly_chart(style_fig(fig), use_container_width=True)
 
-            model_feats = lgbm_feature_names(legacy_model)
-            one_hot_train = looks_one_hot(model_feats) if model_feats else False
+# ──────────────────────────────────────────────────────────────────────────────
+# Page: Distribution (Pie)
+# ──────────────────────────────────────────────────────────────────────────────
+elif page == "Distribution (Pie)":
+    st.markdown("## 🥧 Market Distribution")
+    kpis(df); st.markdown("")
+    dims = [c for c in ["make", "body_type", "drive_type", "year"] if c in df.columns]
+    if not dims:
+        st.warning("No categorical columns available.")
+        st.stop()
 
-            if one_hot_train:
-                # build one-hot matrix with exact training levels
-                X_enc = pd.DataFrame(index=X_prep.index)
-                for c in expected_cols:
-                    if c in legacy_cat_levels:
-                        lvls = legacy_cat_levels[c]
-                        s = X_prep[c].astype(str)
-                        for lvl in lvls:
-                            X_enc[f"{c}__{lvl}"] = (s == lvl).astype(int)
-                    else:
-                        X_enc[c] = pd.to_numeric(X_prep[c], errors="coerce").fillna(0.0)
-                X_final = align_df_to_feature_names(X_enc, model_feats) if model_feats else X_enc
-            else:
-                # raw columns: replace categoricals with integer codes based on cat_levels
-                X_codes = encode_cats_to_codes(X_prep, legacy_cat_levels or {})
-                # ensure only the columns the model knows about (if we have names)
-                if model_feats:
-                    # If model was trained on raw names, reorder; add missing as 0
-                    X_final = align_df_to_feature_names(X_codes, model_feats)
-                else:
-                    X_final = X_codes
-                # Ensure pure numeric ndarray (no category dtype leakage)
-                X_final = X_final.astype(np.float32)
+    colA, colB, colC = st.columns([1, 1, 1])
+    with colA:
+        dim = st.selectbox("Distribution by", options=dims, index=0)
+    with colB:
+        top_n = st.slider("Show top N", 5, 25, 12, step=1)
+    with colC:
+        min_share = st.slider("Min % share", 0.0, 5.0, 1.0, step=0.5)
+    include_other = st.toggle("Include 'Other' slice", value=False)
 
-            # predict with numpy matrix to avoid dtype quirks
-            X_mat = X_final.values if hasattr(X_final, "values") else np.asarray(X_final, dtype=np.float32)
-            pred_val = float(legacy_model.predict(X_mat)[0])
-            pred = pred_val
-            explain = "Predicted using Legacy GBM with strict numeric schema alignment."
-    except Exception as e:
-        st.error(f"Prediction failed: {e}")
+    dff = df.copy()
+    if dim == "year":
+        dff["year"] = dff["year"].astype("Int64")
 
-if pred is not None:
-    c1, c2, c3 = st.columns([1.2, 1, 1])
-    c1.success(f"Estimated Price: ${pred:,.0f}")
-    c1.caption(explain)
+    vc = dff[dim].dropna().astype(str).str.strip().value_counts()
+    total = vc.sum()
 
-    comps, p25, p75, n_comps = compute_comps_and_range(df_plot, user_row)
-    if p25 is not None and p75 is not None:
-        c2.metric("Fair Market Range (P25–P75)", f"${p25:,.0f} - ${p75:,.0f}")
-        c3.metric("Comparable Listings Used", f"{n_comps:,}")
-        if asking_price and asking_price > 0:
-            if asking_price < p25:
-                st.success(f"**Deal Rating:** Great (asking ${asking_price:,.0f} is below the fair range)")
-            elif p25 <= asking_price <= p75:
-                st.info(f"**Deal Rating:** Fair (asking ${asking_price:,.0f} is within the fair range)")
-            else:
-                st.warning(f"**Deal Rating:** High (asking ${asking_price:,.0f} is above the fair range)")
-    else:
-        st.caption("Not enough similar comps to compute a fair market range. Consider widening the filters.")
+    # filter by min_share first, then keep top_n
+    vc = vc[(vc / total * 100) >= min_share].head(top_n)
 
-# =========================
-# ---- DATA PREVIEW -------
-# =========================
-st.divider()
-st.subheader("Data Preview")
-st.dataframe(subset.head(100), use_container_width=True)
+    if include_other:
+        remaining = total - vc.sum()
+        if remaining > 0:
+            vc.loc["Other"] = remaining
 
-# =========================
-# ---- FOOTER -------------
-# =========================
-with st.expander("Notes & Tips"):
-    st.markdown(
-        textwrap.dedent(
-            f"""
-            - **Year input** is integer-only; mileage uses a sensible step.
-            - **Model list depends on selected Make** (based on your dataset).
-            - **Legacy GBM alignment**:
-              - If your model was trained with one-hot columns like `make__Honda`, we rebuild those *exact* columns and order them to the model’s stored feature names.
-              - If it was trained on raw columns (e.g., `make`), we map categories → stable integer codes using `cat_levels.json` (unseen → "Other") and pass a pure **NumPy float matrix**, avoiding LightGBM categorical mismatches.
-            - **Fair Market Range** uses comps within ±{COMPS_YEAR_WINDOW} year and ±{COMPS_MILES_WINDOW:,} miles for the same Make/Model.
-            """
-        )
+    pie = vc.reset_index()
+    pie.columns = [dim, "count"]
+    pie["share"] = (pie["count"] / pie["count"].sum() * 100).round(1)
+
+    fig = px.pie(pie, names=dim, values="count", hole=0.45, color=dim)
+    fig.update_traces(
+        textposition="inside",
+        texttemplate="%{label}<br>%{percent:.1%}",
+        hovertemplate="<b>%{label}</b><br>Count: %{value}<br>Share: %{percent}",
     )
+    st.plotly_chart(style_fig(fig, height=520), use_container_width=True)
+    st.caption("Modern donut chart in the Breaking Bad palette.")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Page: Price Prediction
+# ──────────────────────────────────────────────────────────────────────────────
+else:
+    st.markdown("## 💰 Price Prediction (Schema-Safe)")
+    model, schema, cats = load_legacy_model()
+    MAKES, MODELS_BY_MAKE = build_cascades(df)
+
+    with st.expander("Feature Schema (detected)", expanded=False):
+        st.json({"year": "numeric", "mileage": "numeric", "make": "string", "model": "string"})
+
+    # Inputs
+    c1, c2 = st.columns(2)
+    with c1:
+        y_default = int(df["year"].median()) if "year" in df and df["year"].notna().any() else 2016
+        year = st.number_input("year", min_value=1990, max_value=2026, value=y_default, step=1, format="%d")
+    with c2:
+        m_default = int(df["mileage"].median()) if "mileage" in df and df["mileage"].notna().any() else 60000
+        mileage = st.number_input("mileage", min_value=0, max_value=300_000, value=m_default, step=1000, format="%d")
+
+    c3, c4 = st.columns(2)
+    with c3:
+        if not MAKES:
+            st.error("No makes found in the dataset.")
+            st.stop()
+        make = st.selectbox("make", options=MAKES, index=MAKES.index("Toyota") if "Toyota" in MAKES else 0)
+    with c4:
+        models = MODELS_BY_MAKE.get(make, [])
+        model_name = st.selectbox("model", options=models, index=0 if models else None, disabled=(len(models) == 0))
+
+    ask_price = st.number_input("Optional: Asking/Listing Price (to rate the deal)", min_value=0.0, step=500.0, value=0.0)
+
+    def show_estimate(price: float, p25: float, p75: float, n_comp: int, note: str):
+        a, b, c = st.columns([2, 2, 1])
+        with a:
+            st.success(f"Estimated Price: ${price:,.0f}" if np.isfinite(price) else "Estimated Price: n/a")
+        with b:
+            st.markdown(
+                f"**Fair Market Range (P25–P75)**  \n${p25:,.0f} - ${p75:,.0f}"
+                if np.isfinite(p25) and np.isfinite(p75) else "**Fair Market Range (P25–P75)**  \n—"
+            )
+        with c:
+            st.markdown(f"**Comparable Listings Used**  \n{int(n_comp)}")
+        st.caption(note)
+
+    if st.button("Predict Price", type="primary", use_container_width=True):
+        # Only pass features you trained with (trim removed)
+        feat = {"year": int(year), "mileage": int(mileage), "make": str(make), "model": str(model_name)}
+
+        try:
+            if model is not None and schema is not None:
+                est = predict_with_legacy_gbm(model, schema, cats or {}, feat)
+                p50, extra = comps_estimate(df, feat)  # range for context
+                show_estimate(est, extra.get("p25", np.nan), extra.get("p75", np.nan), extra.get("n_comp", 0),
+                              "Predicted with Legacy GBM — exact model feature order matched.")
+            else:
+                p50, extra = comps_estimate(df, feat)
+                show_estimate(p50, extra.get("p25", np.nan), extra.get("p75", np.nan), extra.get("n_comp", 0),
+                              "Predicted from comparable listings (no model available).")
+        except Exception as e:
+            st.error(f"Prediction failed: {e}")

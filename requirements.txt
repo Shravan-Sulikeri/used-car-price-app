@@ -1,8 +1,8 @@
 streamlit
-altair
+plotly
 pandas
 numpy
 pyarrow
-lightgbm
 scikit-learn
+lightgbm
 joblib

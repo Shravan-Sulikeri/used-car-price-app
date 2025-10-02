@@ -1,78 +1,31 @@
 # Python
-.venv/
 __pycache__/
 *.pyc
-
-# Data (keep only a tiny sample if you want)
-data/**/*
-!data/README.md
-!data/clean_used_cars.csv   # keep the one small canonical CSV (edit if you prefer)
-!data/sample.csv
-
-# Models (don’t commit binaries)
-model/**/*.pkl
-model/**/*.onnx
-model/**/*.joblib
-
-# Notebooks & caches
-**/.ipynb_checkpoints/
-*.ipynb_convert_*.json
-
-# Node / Next.js
-node_modules/
-frontend/node_modules/
-frontend/.next/
-*.log
-
-# Misc
-.DS_Store
-web_backup_*/
-
-# training logs & notebook data
-catboost_info/
-notebooks/data/
-
-# Local data archives
-data/_archive/**
-
-# Intermediate previews
-data/clean_merged_preview.csv
-
-# Big raw dumps we don’t need in git
-data/**/*.zip
-data/**/used_car_listings.*
-data/new/cars.csv
-# Training/build artifacts
-catboost_info/
-*.tfevents
-*.tsv
-notebooks/data/*.csv
-
-# Local-only data & artifacts
-/data/
-/notebooks/data/
-/artifacts/
-*.csv
-*.parquet
-catboost_info/
-*.tfevents
-*.tsv
+*.pyo
+*.pyd
+*.egg-info/
 .venv/
+.env
 
-# Local-only data & artifacts
-/data/
-/notebooks/data/
-/artifacts/
-*.csv
-*.parquet
-catboost_info/
-*.tfevents
-*.tsv
-.venv/
-# data & models
-data/*.csv
-data/*.parquet
-model/*.pkl
-# streamlit cache
+# Streamlit cache
+.streamlit/
 **/.streamlit/
-**/.cache/
+
+# Data (keep raw scripts, ignore big files)
+data/**/*.parquet
+data/**/*.csv
+!data/ingestion/**        # keep ingestion scripts
+!data/raw/.keep           # allow empty raw dir marker
+
+# Model artifacts (recommend NOT committing; use LFS if needed)
+model/*.pkl
+model/*.bin
+model/preview_gbm.csv
+model/metrics_gbm.json
+model/schema_best.json
+model/cat_levels.json
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
