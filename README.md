@@ -14,7 +14,6 @@
 </p>
 
 ---
-
 ## Live repo metrics
 
 <p align="center">
