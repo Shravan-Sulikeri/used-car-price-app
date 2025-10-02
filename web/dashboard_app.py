@@ -334,7 +334,7 @@ if col_year and col_price:
         base = alt.Chart(bands).encode(x=alt.X("YearLabel:N", axis=_year_axis()))
         area = base.mark_area(opacity=0.2).encode(y="p10:Q", y2="p90:Q")
         line = base.mark_line().encode(y=alt.Y("p50:Q", title="Price (P50)"))
-        st.altair_chart((area + line).interactive().properties(height=320), use_container_width=True)
+        st.altair_chart((area + line).interactive().properties(height=320), width='stretch')
 
 # Mileage vs Price
 if col_mileage and col_price:
@@ -349,7 +349,7 @@ if col_mileage and col_price:
                          alt.Tooltip(f"{col_price}:Q", title="Price", format=",.0f")],
             ).properties(height=320)
         )
-        st.altair_chart(chart2.interactive(), use_container_width=True)
+        st.altair_chart(chart2.interactive(), width='stretch')
 
 # Make vs Price (box)
 if col_make and col_price:
@@ -360,7 +360,7 @@ if col_make and col_price:
             alt.Chart(df_m).mark_boxplot()
             .encode(x=alt.X(f"{col_make}:N", sort="-y", title="Make"),
                     y=alt.Y(f"{col_price}:Q", title="Price")).properties(height=360),
-            use_container_width=True
+            width='stretch'
         )
 
 # Model vs Price (box)
@@ -372,7 +372,7 @@ if col_model and col_price:
             alt.Chart(df_mod).mark_boxplot()
             .encode(x=alt.X(f"{col_model}:N", sort="-y", title="Model"),
                     y=alt.Y(f"{col_price}:Q", title="Price")).properties(height=360),
-            use_container_width=True
+            width='stretch'
         )
 
 # Pie
@@ -390,7 +390,7 @@ if pie_dim:
                          alt.Tooltip("count:Q", title="Count", format=",.0f"),
                          alt.Tooltip("pct:Q", title="Share", format=".1%")],
             ).properties(height=380),
-            use_container_width=True
+            width='stretch'
         )
 
 st.divider()
@@ -516,7 +516,7 @@ def compute_comps_and_range(df_base: pd.DataFrame, row: Dict[str, any]) -> Tuple
 
 pred = None
 explain = ""
-if st.button("Predict Price", use_container_width=True):
+if st.button("Predict Price", width='stretch'):
     try:
         # Decide model
         use_legacy = (model_choice == "Legacy GBM" and legacy_model is not None)
@@ -602,7 +602,7 @@ if pred is not None:
 # =========================
 st.divider()
 st.subheader("Data Preview")
-st.dataframe(subset.head(100), use_container_width=True)
+st.dataframe(subset.head(100), width='stretch')
 
 # =========================
 # ---- FOOTER -------------
