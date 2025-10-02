@@ -3,29 +3,17 @@
     "year",
     "mileage",
     "age",
-    "mileage_per_year",
-    "high_mileage",
+    "miles_per_year",
     "make",
     "model",
-    "body",
-    "pred_price"
+    "body_type",
+    "drive_type"
   ],
-  "feature_names": [
-    "year",
-    "mileage",
-    "age",
-    "mileage_per_year",
-    "high_mileage",
-    "make",
-    "model",
-    "body",
-    "pred_price"
-  ],
-  "categorical_features": [
-    "body",
-    "make",
-    "model"
-  ],
-  "target": "price",
-  "notes": "Auto-generated from legacy preview_gbm.csv and cat_levels.json"
+  "numeric_defaults": {
+    "year": 2007.0,
+    "mileage": 0.0,
+    "age": 18.0,
+    "miles_per_year": 5413.746551724138
+  },
+  "generated_at": 1759370592
 }
